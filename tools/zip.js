@@ -18,6 +18,11 @@ function createZip(suffix) {
     'yarn.lock',
     '*.zip',
     '*.map',
+    'build/**',
+    'merge.bat',
+    '*.bak',
+    'LICENSE',
+    'minify.bat',
   ];
   try {
     ignore.push(...fs.readFileSync('.gitignore', 'utf8').split(/\r?\n/));
@@ -28,7 +33,7 @@ function createZip(suffix) {
     delete mj.applications;
   } else if (suffix === 'chrome-beta') {
     delete mj.applications;
-    mj.name = 'Stylus (beta)';
+    mj.name = 'Stylus';
   } else {
     mj.options_ui = {
       /*
@@ -39,7 +44,7 @@ function createZip(suffix) {
       open_in_tab: true,
     };
   }
-  const fileName = `stylus-${suffix}-${mj.version}.zip`;
+  const fileName = `stylus-${suffix}.zip`;
   const file = fs.createWriteStream(fileName);
   const archive = archiver('zip');
   archive.pipe(file);
@@ -50,7 +55,7 @@ function createZip(suffix) {
 
 (async () => {
   try {
-    await Promise.all(['chrome', 'chrome-beta', 'firefox'].map(createZip));
+    await Promise.all(['chrome'].map(createZip));
     console.log('\x1b[32m%s\x1b[0m', 'Stylus zip complete');
   } catch (err) {
     console.error(err);
