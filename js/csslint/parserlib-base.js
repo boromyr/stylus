@@ -692,7 +692,8 @@
     [ANGLE, 'deg,grad,rad,turn'],
     [Tokens.FLEX, 'fr'],
     [Tokens.FREQUENCY, 'hz,khz'],
-    [LENGTH, 'cap,ch,em,ex,ic,lh,rlh,rem,' +
+    [LENGTH, 'cap,ch,em,ex,ic,lh,' +
+      'rcap,rch,rem,rex,ric,rlh,' +
       'cm,mm,in,pc,pt,px,q,' +
       'cqw,cqh,cqi,cqb,cqmin,cqmax,' + // containers
       'vb,vi,vh,vw,vmin,vmax' +
@@ -846,7 +847,7 @@
     '<box-fsv>': 'fill-box | stroke-box | view-box',
     '<color>': '<named-or-hex-color> | <fn:color>',
     '<coord-box>': '<box> | <box-fsv>',
-    '<contain-intrinsic>': 'none | <len> | auto <len>',
+    '<contain-intrinsic>': 'auto? [ none | <len> ]',
     '<content-distribution>': 'space-between | space-around | space-evenly | stretch',
     '<content-list>':
       '[ <string> | <image> | <attr> | ' +
