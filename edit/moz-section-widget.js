@@ -52,6 +52,7 @@ function MozSectionWidget(cm, finder = MozSectionFinder(cm)) {
         $create('li.applies-to-everything', t('appliesToEverything')),
     };
 
+    $('[value=""]', TPL.listItem).remove();
     Object.assign($(C_TYPE, TPL.listItem), hint);
     $(C_VALUE, TPL.listItem).after(
       $create('button.test-regexp', t('genericTest')));
@@ -207,8 +208,8 @@ function MozSectionWidget(cm, finder = MozSectionFinder(cm)) {
         transition: none;
         color: ${fore};
       }
-      ${C_CONTAINER} .svg-icon.select-arrow {
-        fill: ${fore};
+      ${C_CONTAINER} .select-wrapper::after {
+        color: ${fore};
         transition: none;
       }
     `;

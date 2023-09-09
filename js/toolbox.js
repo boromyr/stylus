@@ -19,6 +19,7 @@
   openURL
   sessionStore
   stringAsRegExp
+  stringAsRegExpStr
   tryCatch
   tryRegExp
   tryURL
@@ -91,38 +92,35 @@ const URLS = {
   chromeProtectsNTP: CHROME >= 61,
 
   uso: 'https://userstyles.org/',
+  usoApi: 'https://gateway.userstyles.org/styles/getStyle',
   usoJson: 'https://userstyles.org/styles/chrome/',
 
-  usoArchive: 'https://uso.kkx.one/',
-  usoArchiveRaw: [
+  usoa: 'https://uso.kkx.one/',
+  usoaRaw: [
+    // The newest URL first!
+    'https://cdn.jsdelivr.net/gh/uso-archive/data@flomaster/data/',
     'https://cdn.jsdelivr.net/gh/33kk/uso-archive@flomaster/data/',
     'https://raw.githubusercontent.com/33kk/uso-archive/flomaster/data/',
   ],
 
   usw: 'https://userstyles.world/',
 
-  extractUsoArchiveId: url =>
+  extractUsoaId: url =>
     url &&
-    URLS.usoArchiveRaw.some(u => url.startsWith(u)) &&
-    Number(url.match(/\/(\d+)\.user\.css|$/)[1]),
-  extractUsoArchiveInstallUrl: url => {
-    const id = URLS.extractUsoArchiveId(url);
-    return id ? `${URLS.usoArchive}style/${id}` : '';
-  },
-  makeUsoArchiveCodeUrl: id => `${URLS.usoArchiveRaw[0]}usercss/${id}.user.css`,
-
-  extractGreasyForkInstallUrl: url =>
-    /^(https:\/\/(?:greasy|sleazy)fork\.org\/scripts\/\d+)[^/]*\/code\/[^/]*\.user\.css$|$/.exec(url)[1],
-
-  extractUSwId: url =>
+    URLS.usoaRaw.some(u => url.startsWith(u)) &&
+    +url.match(/\/(\d+)\.user\.css|$/)[1],
+  extractUswId: url =>
     url &&
     url.startsWith(URLS.usw) &&
-    Number(url.match(/\/(\d+)\.user\.css|$/)[1]),
-  extractUSwInstallUrl: url => {
-    const id = URLS.extractUSwId(url);
-    return id ? `${URLS.usw}style/${id}` : '';
+    +url.match(/\/(\d+)\.user\.css|$/)[1],
+  makeInstallUrl: url => {
+    let id;
+    return ((id = URLS.extractUsoaId(url))) ? `${URLS.usoa}style/${id}`
+      : ((id = URLS.extractUswId(url))) ? `${URLS.usw}style/${id}`
+        : /^(https:\/\/(?:greasy|sleazy)fork\.org\/scripts\/\d+)[^/]*\/code\/[^/]*\.user\.css$|$/
+          .exec(url)[1]
+        || '';
   },
-  makeUswCodeUrl: id => `${URLS.usw}api/style/${id}.user.css`,
 
   supported: url => (
     url.startsWith('http') ||
@@ -132,7 +130,7 @@ const URLS = {
     !URLS.chromeProtectsNTP && url.startsWith('chrome://newtab/')
   ),
 
-  isLocalhost: url => /^file:|^https?:\/\/(localhost|127\.0\.0\.1)\//.test(url),
+  isLocalhost: url => /^file:|^https?:\/\/([^/]+@)?(localhost|127\.0\.0\.1)(:\d+)?\//.test(url),
 };
 
 const RX_META = /\/\*!?\s*==userstyle==[\s\S]*?==\/userstyle==\s*\*\//i;
@@ -232,9 +230,12 @@ async function activateTab(tab, {url, index, openerTabId} = {}) {
   return tab;
 }
 
-function stringAsRegExp(s, flags, asString) {
-  s = s.replace(/[{}()[\]\\.+*?^$|]/g, '\\$&');
-  return asString ? s : new RegExp(s, flags);
+function stringAsRegExp(s, flags) {
+  return new RegExp(stringAsRegExpStr(s), flags);
+}
+
+function stringAsRegExpStr(s) {
+  return s.replace(/[{}()[\]\\.+*?^$|]/g, '\\$&');
 }
 
 function ignoreChromeError() {

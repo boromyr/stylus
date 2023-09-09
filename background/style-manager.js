@@ -1,5 +1,5 @@
 /* global API msg */// msg.js
-/* global CHROME URLS deepEqual isEmptyObj mapObj stringAsRegExp tryRegExp tryURL */// toolbox.js
+/* global CHROME URLS deepEqual isEmptyObj mapObj stringAsRegExpStr tryRegExp tryURL */// toolbox.js
 /* global bgReady createCache uuidIndex */// common.js
 /* global calcStyleDigest styleCodeEmpty */// sections-util.js
 /* global db */
@@ -144,7 +144,7 @@ const styleMan = (() => {
         // Must be called after the style is deleted from dataMap
         API.usw.revoke(id);
       }
-      API.drafts.delete(id);
+      API.drafts.delete(id).catch(() => {});
       await msg.broadcast({
         method: 'styleDeleted',
         style: {id},
@@ -157,21 +157,24 @@ const styleMan = (() => {
       if (ready.then) await ready;
       style = mergeWithMapped(style);
       style.updateDate = Date.now();
+      API.drafts.delete(style.id).catch(() => {});
       return saveStyle(style, {reason: 'editSave'});
     },
 
     /** @returns {Promise<?StyleObj>} */
-    async find(...filters) {
+    async find(filter, subkey) {
       if (ready.then) await ready;
-      for (const filter of filters) {
-        const filterEntries = Object.entries(filter);
-        for (const {style} of dataMap.values()) {
-          if (filterEntries.every(([key, val]) => style[key] === val)) {
-            return style;
+      for (const {style} of dataMap.values()) {
+        let obj = subkey ? style[subkey] : style;
+        if (!obj) continue;
+        for (const key in filter) {
+          if (filter[key] !== obj[key]) {
+            obj = null;
+            break;
           }
         }
+        if (obj) return style;
       }
-      return null;
     },
 
     /** @returns {Promise<StyleObj[]>} */
@@ -386,8 +389,8 @@ const styleMan = (() => {
 
   function calcRemoteId({md5Url, updateUrl, usercssData: ucd} = {}) {
     let id;
-    id = (id = /\d+/.test(md5Url) || URLS.extractUsoArchiveId(updateUrl)) && `uso-${id}`
-      || (id = URLS.extractUSwId(updateUrl)) && `usw-${id}`
+    id = (id = /\d+/.test(md5Url) || URLS.extractUsoaId(updateUrl)) && `uso-${id}`
+      || (id = URLS.extractUswId(updateUrl)) && `usw-${id}`
       || '';
     return id && [
       id,
@@ -425,7 +428,7 @@ const styleMan = (() => {
 
   function handleDraft(port) {
     const id = port.name.split(':').pop();
-    port.onDisconnect.addListener(() => API.drafts.delete(Number(id) || id));
+    port.onDisconnect.addListener(() => API.drafts.delete(Number(id) || id).catch(() => {}));
   }
 
   function handleLivePreview(port) {
@@ -610,13 +613,16 @@ const styleMan = (() => {
     if ((url = style.md5Url) && url.includes('update.update.userstyles')) {
       res = style.md5Url = url.replace('update.update.userstyles', 'update.userstyles');
     }
+    /* Outdated USO-archive links */
+    if (`${style.url}${style.installationUrl}`.includes('https://33kk.github.io/uso-archive/')) {
+      delete style.url;
+      delete style.installationUrl;
+    }
     /* Default homepage URL for external styles installed from a known distro */
     if (
       (!style.url || !style.installationUrl) &&
       (url = style.updateUrl) &&
-      (url = URLS.extractGreasyForkInstallUrl(url) ||
-        URLS.extractUsoArchiveInstallUrl(url) ||
-        URLS.extractUSwInstallUrl(url) ||
+      (url = URLS.makeInstallUrl(url) ||
         (url = /\d+/.exec(style.md5Url)) && `${URLS.uso}styles/${url[0]}`
       )
     ) {
@@ -729,7 +735,7 @@ const styleMan = (() => {
   }
 
   function compileGlob(text) {
-    return stringAsRegExp(text, '', true)
+    return stringAsRegExpStr(text)
       .replace(/\\\\\\\*|\\\*/g, m => m.length > 2 ? m : '.*');
   }
 

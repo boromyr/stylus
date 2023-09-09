@@ -60,8 +60,8 @@
 
   // FIXME: move this to background page when following bugs are fixed:
   // https://bugzil.la/1587723, https://crbug.com/968651
-  const mqDark = matchMedia('(prefers-color-scheme: dark)');
-  mqDark.onchange = e => API.colorScheme.updateSystemPreferDark(e.matches);
+  const mqDark = !isFrame && matchMedia('(prefers-color-scheme: dark)');
+  if (mqDark) mqDark.onchange = e => API.colorScheme.updateSystemPreferDark(e.matches);
 
   // Declare all vars before init() or it'll throw due to "temporal dead zone" of const/let
   init();
@@ -109,7 +109,7 @@
         window[SYM] ||
         parentStyles && await new Promise(onFrameElementInView) && parentStyles ||
         // XML in Chrome will be auto-converted to html later, so we can't style it via XHR now
-        !isFrameSameOrigin && !isXml && chrome.app && !chrome.tabs && tryCatch(getStylesViaXhr) ||
+        !isFrameSameOrigin && !isXml && !chrome.tabs && tryCatch(getStylesViaXhr) ||
         await API.styles.getSectionsByUrl(matchUrl, null, true);
       if (styles.cfg) {
         isDisabled = styles.cfg.disableAll;
@@ -268,7 +268,7 @@
     // In Chrome content script is orphaned on an extension update/reload
     // so we need to detach event listeners
     window.removeEventListener(orphanEventId, orphanCheck, true);
-    mqDark.onchange = null;
+    if (mqDark) mqDark.onchange = null;
     isOrphaned = true;
     setTimeout(styleInjector.clear, 1000); // avoiding FOUC
     tryCatch(msg.off, applyOnMessage);

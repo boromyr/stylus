@@ -110,11 +110,9 @@ function $$remove(selector, base = document) {
  appendChild:      element/string or an array of elements/strings
  dataset:          object
  any DOM property: assigned as is
-
- tag may include namespace like 'ns:tag'
  */
 function $create(selector = 'div', properties, children) {
-  let ns, tag, opt;
+  let tag, opt;
   if (typeof selector === 'string') {
     if (Array.isArray(properties) ||
         properties instanceof Node ||
@@ -146,13 +144,7 @@ function $create(selector = 'div', properties, children) {
     tag = opt.tag;
     children = opt.appendChild || properties;
   }
-  if (tag && tag.includes(':')) {
-    [ns, tag] = tag.split(':');
-    if (ns === 'SVG' || ns === 'svg') {
-      ns = 'http://www.w3.org/2000/svg';
-    }
-  }
-  const element = ns ? document.createElementNS(ns, tag) :
+  const element =
     tag === 'fragment' ? document.createDocumentFragment() :
       document.createElement(tag || 'div');
   for (const child of Array.isArray(children) ? children : [children]) {
@@ -178,13 +170,7 @@ function $create(selector = 'div', properties, children) {
       case 'appendChild':
         break;
       default: {
-        if (ns) {
-          const i = key.indexOf(':') + 1;
-          const attrNS = i && `http://www.w3.org/1999/${key.slice(0, i - 1)}`;
-          element.setAttributeNS(attrNS || null, key, val);
-        } else {
-          element[key] = val;
-        }
+        element[key] = val;
       }
     }
   }
@@ -344,7 +330,10 @@ function setupLivePrefs(ids) {
     }
     for (const el of els) {
       const oldValue = getValue(el);
-      if (!isSame(el, oldValue, value)) {
+      const diff = !isSame(el, oldValue, value);
+      if ((init || diff) && el.type === 'select-one' && el.classList.contains('fit-width')) {
+        fitSelectBox(el, value, init); /* global fitSelectBox */// manage/render.js
+      } else if (diff) {
         if (el.type === 'radio') {
           el.checked = value === oldValue;
         } else if (el.type === 'checkbox') {
