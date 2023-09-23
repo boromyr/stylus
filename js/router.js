@@ -35,7 +35,7 @@ const router = {
     const {buffer} = router;
     if (!buffer.length) {
       buffer.push(location.href);
-    } else if (buffer[buffer.length - 1] === location.href) {
+    } else if (buffer[buffer.length - 1] === location.href && router.initialized) {
       return;
     } else if (replace) {
       buffer[buffer.length - 1] = location.href;
@@ -57,6 +57,7 @@ const router = {
         callback(state);
       }
     }
+    router.initialized = true;
   },
 
   /**
@@ -86,7 +87,8 @@ const router = {
     const u = new URL(location);
     const entries = typeof what === 'object' ? Object.entries(what) : [[what, value]];
     for (const [key, val] of entries) {
-      u.searchParams[val ? 'set' : 'delete'](key, val);
+      if (val) u.searchParams.set(key, val);
+      else u.searchParams.delete(key);
     }
     history.replaceState(history.state, null, `${u}`);
     router.update(true);

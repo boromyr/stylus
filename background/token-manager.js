@@ -1,4 +1,6 @@
-/* global FIREFOX clamp getActiveTab waitForTabUrl URLS */// toolbox.js
+/* global detectVivaldi isVivaldi */// common.js
+/* global FIREFOX clamp URLS */// toolbox.js
+/* global waitForTabUrl */// tab-util.js
 /* global chromeLocal */// storage-util.js
 'use strict';
 
@@ -246,9 +248,7 @@ const tokenMan = (() => {
 
   async function detectVivaldiWebRequestBug() {
     // Workaround for https://github.com/openstyles/stylus/issues/1182
-    // Note that modern Vivaldi isn't exposed in `navigator.userAgent` but it adds `extData` to tabs
-    const anyTab = await getActiveTab() || (await browser.tabs.query({}))[0];
-    if (anyTab && !(anyTab.extData || anyTab.vivExtData)) {
+    if (isVivaldi == null ? !await detectVivaldi() : !isVivaldi) {
       return false;
     }
     let bugged = true;
@@ -262,7 +262,7 @@ const tokenMan = (() => {
       state: 'minimized',
       url: TEST_URL,
     });
-    await waitForTabUrl(tab);
+    await waitForTabUrl(tab.id);
     chrome.windows.remove(tab.windowId);
     chrome.webRequest.onBeforeRequest.removeListener(check);
     return bugged;

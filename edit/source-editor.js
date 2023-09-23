@@ -105,11 +105,9 @@ async function SourceEditor() {
     scrollToEditor: () => {},
   });
 
-  prefs.subscribeMany({
-    'editor.linter': updateLinterSwitch,
-    'editor.appliesToLineWidget': (k, val) => sectionWidget.toggle(val),
-    'editor.toc.expanded': (k, val) => sectionFinder.onOff(editor.updateToc, val),
-  }, {runNow: true});
+  prefs.subscribe('editor.linter', updateLinterSwitch, true);
+  prefs.subscribe('editor.appliesToLineWidget', (k, val) => sectionWidget.toggle(val), true);
+  prefs.subscribe('editor.toc.expanded', (k, val) => sectionFinder.onOff(editor.updateToc, val), true);
 
   cm.clearHistory();
   cm.markClean();
@@ -185,7 +183,6 @@ async function SourceEditor() {
     if (Object.keys(sec0).length === 1) { // the only key is 'code'
       sec0.domains = ['example.com'];
     }
-    style.name = [style.name, new Date().toLocaleString()].filter(Boolean).join(' - ');
     style.sourceCode = (tpl || DEFAULT_TEMPLATE)
       .replace(/(@name)(?:([\t\x20]+).*|\n)/, (_, k, space) => `${k}${space || ' '}${style.name}`)
       .replace(/\s*@-moz-document[^{]*{([^}]*)}\s*$/g, // stripping dummy sections

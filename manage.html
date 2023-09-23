@@ -42,7 +42,7 @@
   <template data-id="styleNewUI">
     <div class="entry">
       <h2 class="style-name">
-        <input class="checker" type="checkbox" i18n="title:toggleStyle">
+        <input type="checkbox" i18n="title:toggleStyle">
         <a class="style-name-link">
           &nbsp;
           <span class="style-info" data-type="version"></span>
@@ -105,15 +105,14 @@
     </details>
   </template>
 
-  <script src="js/polyfill.js"></script>
-  <script src="js/msg.js"></script>
+  <script src="content/style-injector.js"></script>
+  <script src="js/browser.js"></script>
   <script src="js/toolbox.js"></script>
+  <script src="js/msg.js"></script>
   <script src="js/prefs.js"></script>
   <script src="js/dom.js"></script>
   <script src="js/localization.js"></script>
   <script src="js/router.js"></script>
-
-  <script src="content/style-injector.js"></script>
   <script src="content/apply.js"></script>
 
   <script src="manage/events.js"></script>
@@ -249,9 +248,9 @@
           <a href="edit.html">
             <button id="add-style-label" i18n="addStyleLabel" tabindex="-1"></button>
           </a>
-          <label id="add-style-as-usercss-wrapper">
+          <label id="add-style-as-usercss-wrapper" i18n="title:optionsAdvancedNewStyleAsUsercss">
             <input type="checkbox" id="newStyleAsUsercss">
-            <span i18n="manageNewStyleAsUsercss, title:optionsAdvancedNewStyleAsUsercss"></span>
+            <i class=i-usercss></i>
             <a id="usercss-wiki"
                class="icon"
                href="https://github.com/openstyles/stylus/wiki/Usercss"
@@ -315,7 +314,7 @@
 
 <link rel="stylesheet" href="manage/manage.css">
 <link rel="stylesheet" href="manage/manage-newui.css" id="newUI">
-<script src="js/dark-themer.js"></script> <!-- must be last in HEAD to avoid FOUC -->
+<script src="js/themer.js"></script> <!-- must be last in HEAD to avoid FOUC -->
 </head>
 
 <body id="stylus-manage" i18n="dragndrop-hint:dragDropMessage">

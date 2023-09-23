@@ -1,6 +1,5 @@
 /* global API msg */// msg.js
-/* global StyleInjector */
-/* global prefs */
+/* global StyleInjector isFrame isFrameNoUrl isFrameSameOrigin */// style-injector.js
 'use strict';
 
 (() => {
@@ -11,41 +10,38 @@
    * false -> when disableAll mode is on at start, the styles won't be sent
    * so while disableAll lasts we can ignore messages about style updates because
    * the tab will explicitly ask for all styles in bulk when disableAll mode ends */
-  let hasStyles = false;
+  let ownStyles;
   let isDisabled = false;
   let isTab = !chrome.tabs || location.pathname !== '/popup.html';
-  const order = {main: [], prio: []};
+  let order;
   const calcOrder = ({id}) =>
     (order.prio[id] || 0) * 1e6 ||
     order.main[id] ||
     id + .5e6; // no order = at the end of `main`
-  const isFrame = window !== parent;
-  const isFrameSameOrigin = isFrame
-    && (tryCatch(Object.getOwnPropertyDescriptor, parent.location, 'href') || {}).get;
-    // TODO: remove tryCatch and call directly when minimum_chrome_version >= 86
   const isXml = document instanceof XMLDocument;
-  const isUnstylable = !chrome.app && isXml;
+  const CHROME = 'app' in chrome;
+  const SYM_ID = 'styles';
+  const isUnstylable = !CHROME && isXml;
   const styleInjector = StyleInjector({
     compare: (a, b) => calcOrder(a) - calcOrder(b),
     onUpdate: onInjectorUpdate,
   });
   // dynamic iframes don't have a URL yet so we'll use their parent's URL (hash isn't inherited)
-  const isFrameNoUrl = isFrameSameOrigin && location.protocol === 'about:';
   let matchUrl = isFrameNoUrl
     ? parent.location.href.split('#')[0]
     : location.href;
-
-  // save it now because chrome.runtime will be unavailable in the orphaned script
-  const orphanEventId = chrome.runtime.id;
   let isOrphaned;
+  let offscreen;
+  let topSite = '';
   // firefox doesn't orphanize content scripts so the old elements stay
-  if (!chrome.app) styleInjector.clearOrphans();
+  if (!CHROME) styleInjector.clearOrphans();
 
   /** @type chrome.runtime.Port */
   let port;
   let lazyBadge = isFrame;
-  let parentDomain;
 
+  /** Polyfill for documentId in Firefox and Chrome pre-106 */
+  const instanceId = !(CHROME && CSS.supports('top', '1ic')) && (Math.random() + matchUrl);
   /* about:blank iframes are often used by sites for file upload or background tasks
    * and they may break if unexpected DOM stuff is present at `load` event
    * so we'll add the styles only if the iframe becomes visible */
@@ -61,7 +57,7 @@
   // FIXME: move this to background page when following bugs are fixed:
   // https://bugzil.la/1587723, https://crbug.com/968651
   const mqDark = !isFrame && matchMedia('(prefers-color-scheme: dark)');
-  if (mqDark) mqDark.onchange = e => API.colorScheme.updateSystemPreferDark(e.matches);
+  if (mqDark) mqDark.onchange = e => API.info.set({preferDark: e.matches});
 
   // Declare all vars before init() or it'll throw due to "temporal dead zone" of const/let
   init();
@@ -75,56 +71,41 @@
   }
 
   msg.onTab(applyOnMessage);
-  window.addEventListener('pageshow', e => {
-    if (e.isTrusted && e.persisted) { // bfcache
-      updateCount();
-    }
-  });
+  addEventListener('pageshow', onBFCache);
 
   if (!chrome.tabs) {
-    window.dispatchEvent(new CustomEvent(orphanEventId));
-    window.addEventListener(orphanEventId, orphanCheck, true);
+    dispatchEvent(new Event(chrome.runtime.id));
+    addEventListener(chrome.runtime.id, orphanCheck, true);
   }
 
   function onInjectorUpdate() {
     if (!isOrphaned) {
       updateCount();
-      const onOff = prefs[styleInjector.list.length ? 'subscribe' : 'unsubscribe'];
-      onOff('disableAll', updateDisableAll);
-      if (isFrame) {
-        updateExposeIframes();
-        onOff('exposeIframes', updateExposeIframes);
-      }
+      if (isFrame) updateExposeIframes();
     }
   }
 
   async function init() {
-    if (isUnstylable) {
-      await API.styleViaAPI({method: 'styleApply'});
-    } else {
-      const SYM_ID = 'styles';
-      const SYM = Symbol.for(SYM_ID);
-      const parentStyles = isFrameNoUrl && chrome.app && parent[parent.Symbol.for(SYM_ID)];
-      const styles =
-        window[SYM] ||
-        parentStyles && await new Promise(onFrameElementInView) && parentStyles ||
-        // XML in Chrome will be auto-converted to html later, so we can't style it via XHR now
-        !isFrameSameOrigin && !isXml && !chrome.tabs && tryCatch(getStylesViaXhr) ||
-        await API.styles.getSectionsByUrl(matchUrl, null, true);
-      if (styles.cfg) {
-        isDisabled = styles.cfg.disableAll;
-        Object.assign(order, styles.cfg.order);
-      }
-      hasStyles = !isDisabled;
-      if (hasStyles) {
-        window[SYM] = styles;
-        await styleInjector.apply(styles);
-      } else {
-        delete window[SYM];
-        prefs.subscribe('disableAll', updateDisableAll);
-      }
-      styleInjector.toggle(hasStyles);
-    }
+    if (isUnstylable) return API.styleViaAPI({method: 'styleApply'});
+    let data = isFrameNoUrl && CHROME && parent[parent.Symbol.for(SYM_ID)];
+    if (data) await new Promise(onFrameElementInView);
+    else data = !isFrameSameOrigin && !isXml && !chrome.tabs && tryCatch(getStylesViaXhr);
+    // XML in Chrome will be auto-converted to html later, so we can't style it via XHR now
+    await applyStyles(data);
+  }
+
+  async function applyStyles(data) {
+    if (isOrphaned) return;
+    let {cfg} = data || (data = await API.styles.getSectionsByUrl(matchUrl, null, !ownStyles));
+    if (!cfg) cfg = data.cfg = ownStyles.cfg;
+    isDisabled = cfg.off;
+    order = cfg.order;
+    topSite = cfg.top;
+    ownStyles = window[Symbol.for(SYM_ID)] = data;
+    if (!isFrame && topSite === '') cfg.top = location.origin; // used by child frames via parentStyles
+    if (styleInjector.list.length) await styleInjector.replace(ownStyles);
+    else if (!isDisabled) await styleInjector.apply(ownStyles);
+    styleInjector.toggle(!isDisabled);
   }
 
   /** Must be executed inside try/catch */
@@ -140,20 +121,13 @@
     return JSON.parse(xhr.response);
   }
 
-  function applyOnMessage(request) {
-    const {method} = request;
-    if (isUnstylable) {
-      if (method === 'urlChanged') {
-        request.method = 'styleReplaceAll';
-      }
-      if (/^(style|updateCount)/.test(method)) {
-        API.styleViaAPI(request);
-        return;
-      }
+  function applyOnMessage(req) {
+    if (isUnstylable && /^(style|updateCount|urlChanged)/.test(req.method)) {
+      API.styleViaAPI(req);
+      return;
     }
-
-    const {style} = request;
-    switch (method) {
+    const {style} = req;
+    switch (req.method) {
       case 'ping':
         return true;
 
@@ -162,11 +136,11 @@
         break;
 
       case 'styleUpdated':
-        if (!hasStyles && isDisabled) break;
+        if (!ownStyles && isDisabled) break;
         if (style.enabled) {
-          API.styles.getSectionsByUrl(matchUrl, style.id).then(sections =>
-            sections[style.id]
-              ? styleInjector.apply(sections)
+          API.styles.getSectionsByUrl(matchUrl, style.id).then(res =>
+            res.sections.length
+              ? styleInjector.apply(res)
               : styleInjector.remove(style.id));
         } else {
           styleInjector.remove(style.id);
@@ -174,56 +148,56 @@
         break;
 
       case 'styleAdded':
-        if (!hasStyles && isDisabled) break;
-        if (style.enabled) {
+        if ((ownStyles || !isDisabled) && style.enabled) {
           API.styles.getSectionsByUrl(matchUrl, style.id)
             .then(styleInjector.apply);
         }
         break;
 
-      case 'styleSort':
-        Object.assign(order, request.order);
-        styleInjector.sort();
-        break;
-
       case 'urlChanged':
-        if (!hasStyles && isDisabled || matchUrl === request.url) break;
-        matchUrl = request.url;
-        API.styles.getSectionsByUrl(matchUrl).then(sections => {
-          hasStyles = true;
-          styleInjector.replace(sections);
-        });
+        if ((ownStyles || !isDisabled) && req.iid === instanceId && matchUrl !== req.url) {
+          matchUrl = req.url;
+          applyStyles();
+        }
         break;
 
       case 'updateCount':
         updateCount();
         break;
+
+      case 'injectorConfig': {
+        let v;
+        if ((v = req.cfg.off) != null) { isDisabled = v; updateDisableAll(); }
+        if ((v = req.cfg.order) != null) { order = v; styleInjector.sort(); }
+        if (isFrame && (v = req.cfg.top) != null) { topSite = v; updateExposeIframes(); }
+        break;
+      }
+
+      case 'backgroundReady':
+        // This may happen when reloading the background page without reloading the extension
+        if (ownStyles) updateCount();
+        return true;
     }
   }
 
-  function updateDisableAll(key, disableAll) {
-    isDisabled = disableAll;
+  function updateDisableAll() {
     if (isUnstylable) {
-      API.styleViaAPI({method: 'prefChanged', prefs: {disableAll}});
-    } else if (!hasStyles && !disableAll) {
-      init();
+      API.styleViaAPI({method: 'injectorConfig', cfg: {off: isDisabled}});
+    } else if (!ownStyles && !isDisabled) {
+      if (!offscreen) init();
     } else {
-      styleInjector.toggle(!disableAll);
+      styleInjector.toggle(!isDisabled);
     }
   }
 
-  async function updateExposeIframes(key, value = prefs.get('exposeIframes')) {
+  function updateExposeIframes() {
     const attr = 'stylus-iframe';
     const el = document.documentElement;
     if (!el) return; // got no styles so styleInjector didn't wait for <html>
-    if (!value || !styleInjector.list.length) {
-      el.removeAttribute(attr);
-    } else {
-      if (!parentDomain) parentDomain = await API.getTabUrlPrefix();
-      // Check first to avoid triggering DOM mutation
-      if (el.getAttribute(attr) !== parentDomain) {
-        el.setAttribute(attr, parentDomain);
-      }
+    if (!topSite || !styleInjector.list.length) {
+      if (el.hasAttribute(attr)) el.removeAttribute(attr);
+    } else if (el.getAttribute(attr) !== topSite) { // Checking first to avoid DOM mutations
+      el.setAttribute(attr, topSite);
     }
   }
 
@@ -237,14 +211,13 @@
       }
       if (lazyBadge && performance.now() > 1000) lazyBadge = false;
     }
-    (isUnstylable ?
-      API.styleViaAPI({method: 'updateCount'}) :
-      API.updateIconBadge(styleInjector.list.map(style => style.id), {lazyBadge})
-    ).catch(msg.ignoreError);
+    if (isUnstylable) API.styleViaAPI({method: 'updateCount'});
+    else API.updateIconBadge(styleInjector.list.map(style => style.id), {lazyBadge, iid: instanceId});
   }
 
   function onFrameElementInView(cb) {
     parent[parent.Symbol.for('xo')](frameElement, cb);
+    (offscreen || (offscreen = [])).push(cb);
   }
 
   /** @param {IntersectionObserverEntry[]} entries */
@@ -257,18 +230,27 @@
     }
   }
 
+  function onBFCache(e) {
+    if (e.isTrusted && e.persisted) {
+      updateCount();
+    }
+  }
+
   function tryCatch(func, ...args) {
     try {
       return func(...args);
     } catch (e) {}
   }
 
-  function orphanCheck() {
+  function orphanCheck(evt) {
     if (chrome.runtime.id) return;
     // In Chrome content script is orphaned on an extension update/reload
     // so we need to detach event listeners
-    window.removeEventListener(orphanEventId, orphanCheck, true);
+    removeEventListener(evt.type, orphanCheck, true);
+    removeEventListener('pageshow', onBFCache);
     if (mqDark) mqDark.onchange = null;
+    if (offscreen) for (const fn of offscreen) fn();
+    offscreen = null;
     isOrphaned = true;
     setTimeout(styleInjector.clear, 1000); // avoiding FOUC
     tryCatch(msg.off, applyOnMessage);

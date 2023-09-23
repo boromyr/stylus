@@ -28,14 +28,17 @@
   --c85: hsl(0, 0%, 85%);
   --c90: hsl(0, 0%, 90%);
   --c95: hsl(0, 0%, 95%);
+  --c98: hsl(0, 0%, 98%);
+  --c99: hsl(0, 0%, 99%);
   --c100: hsl(0, 0%, 100%);
   --cmax: hsl(0, 0%, 100%);
   --bg: var(--c100);
   --fg: var(--c00);
-  --accent-1: hsl(180, 100%, 15%);
+  --accent-1: hsl(180, 100%, 19%);
   --accent-2: hsl(180, 50%, 40%);
   --accent-3: hsl(180, 40%, 69%);
   --red1: hsl(0, 70%, 45%);
+  --zebra: hsla(0, 0%, 50%, 0.05);
 }
 body {
   font: normal 12px var(--family);
@@ -72,10 +75,7 @@ button {
   font-size: 13px;
   line-height: 1.2;
   color: var(--fg);
-  background-color: var(--bg);
-  background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAeCAYAAADtlXTHAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4QwGBBwIHvKt6QAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAAAL0lEQVQI12NoaGgQZ2JgYGBkYmBgYGZiYGBggrMY4VxsYsyoskQQCB2MWAxAMhkADVECDhlW9CoAAAAASUVORK5CYII=');
-  background-repeat: repeat-x;
-  background-size: 100% 100%;
+  background: linear-gradient(var(--c95), var(--c90));
   transition: background-color .25s, border-color .25s;
 }
 
@@ -318,7 +318,8 @@ input[type="search"][data-focused-via-click]:focus,
 input[type="number"][data-focused-via-click]:focus {
   /* Using box-shadow instead of the ugly outline in new Chrome */
   outline: none;
-  box-shadow: 0 0 0 1px hsl(180, 100%, 38%), 0 0 3px hsla(180, 100%, 60%, .5);
+  box-shadow: var(--focus-shadow);
+  --focus-shadow: 0 0 0 1px hsl(180, 100%, 38%), 0 0 3px hsla(180, 100%, 60%, .5);
 }
 
 [data-focused-via-click] :focus,
@@ -422,24 +423,9 @@ body.resizing-v > * {
   button {
     padding-top: 2.5px;
   }
-
-/* We can customize everything about number inputs except arrows. They're horrible in Linux FF, so we'll hide them unless hovered or focused. */
-  .firefox.non-windows input[type="number"] {
+  .firefox input[type="number"]:not(:hover):not(:focus) {
     -moz-appearance: textfield;
-    background: var(--bg);
-    color: var(--fg);
-    border: 1px solid var(--c65);
-  }
-
-  .firefox.non-windows input[type="number"]:not(:disabled):hover,
-  .firefox.non-windows input[type="number"]:focus {
-    -moz-appearance: number-input;
-  }
-
-  .firefox.non-windows input[type="color"] {
-    background: var(--bg);
-    border: 1px solid var(--c65);
-    padding: 4px;
+    padding-right: 1.5em;
   }
 }
 
@@ -452,7 +438,7 @@ body.resizing-v > * {
 @font-face {
   font-family: 'icons';
   src: url(/icons.ttf) format('truetype');
-  unicode-range: /*AUTO-GENERATED-ICON-RANGE*/ U+20,U+2195,U+2197,U+21b2,U+21b6,U+22c1,U+22ee,U+24d8,U+25bc,U+25f4,U+2611,U+2699,U+270f,U+2713,U+2714,U+2716,U+2795,U+2796,U+27f3,U+e000;
+  unicode-range: /*AUTO-GENERATED-ICON-RANGE*/ U+20,U+2195,U+2197,U+21b2,U+21b6,U+222a,U+22c1,U+22ee,U+24d8,U+25bc,U+25f4,U+2611,U+2699,U+270f,U+2713,U+2714,U+2716,U+2795,U+2796,U+27f3,U+d83e;
 }
 
 /*AUTO-GENERATED-ICON*/ .i-check1::after { content: "✓"; }
@@ -470,7 +456,8 @@ body.resizing-v > * {
 /*AUTO-GENERATED-ICON*/ .i-plus::after { content: "➕"; }
 /*AUTO-GENERATED-ICON*/ .i-reorder::after { content: "↕"; }
 /*AUTO-GENERATED-ICON*/ .i-select-arrow::after { content: "▼"; }
-/*AUTO-GENERATED-ICON*/ .i-sort-down::after { content: ""; }
+/*AUTO-GENERATED-ICON*/ .i-sort-down::after { content: "🠇"; }
+/*AUTO-GENERATED-ICON*/ .i-usercss::after { content: "∪"; }
 /*AUTO-GENERATED-ICON*/ .i-undo::after { content: "↶"; }
 /*AUTO-GENERATED-ICON*/ .i-update-check::after { content: "⟳"; }
 /*AUTO-GENERATED-ICON*/ .i-v::after { content: "⋁"; }

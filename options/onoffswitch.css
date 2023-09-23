@@ -1,73 +1,62 @@
-/* On/Off FlipSwitch https://proto.io/freebies/onoff/ */
-
-.onoffswitch {
-  position: relative;
-  margin: 1ex 0;
-  -moz-user-select: none;
-  user-select: none;
-}
-
-.onoffswitch input {
+.slider {
+  --width: 24px;
+  --knob: 12px;
+  --pad: 0px;
+  --color-off: hsla(0, 0%, 50%, .35);
+  --color-on: hsla(180, 50%, 40%, .33);
+  --shadow-hsl: 180, 50%, 10%;
   -webkit-appearance: none;
   -moz-appearance: none;
-  cursor: default;
-  position: absolute;
-  top: -8px;
-  bottom: -10px;
-  left: -10px;
-  width: calc(100% + 12px);
-  border: 0;
+  appearance: none;
+  border: none;
+  flex-basis: var(--width);
+  width: var(--width);
+  height: calc(var(--knob) - 2 * var(--pad));
+  border-radius: var(--knob);
+  background: var(--color-off);
+  transition: box-shadow .2s;
+  display: inline-flex;
+  align-items: center;
 }
-
-#message-box .onoffswitch input {
-  top: -6px;
-  left: -6px;
-  bottom: 0;
-  height: calc(100% + 12px);
+.slider,
+.slider:focus {
+  box-shadow: inset 1px 1px 2px hsla(var(--shadow-hsl), .5);
 }
-
-.onoffswitch span {
-  display: block;
-  overflow: hidden;
-  height: 12px;
-  padding: 0;
-  line-height: 12px;
-  border: 0 solid var(--c90);
-  border-radius: 12px;
-  background-color: var(--c85);
-  box-shadow: inset 2px 2px 4px rgba(0,0,0,0.1);
-  pointer-events: none; /* this is just a non-clickable decoration, only `input` is clickable */
-}
-
-.onoffswitch span::before {
+.slider::after {
   content: "";
-  display: block;
-  width: 18px;
-  height: 18px;
-  margin: -3px;
-  background: var(--knob, var(--c95));
+  width: var(--knob);
+  height: var(--knob);
+  border-radius: 100%;
+  box-shadow: 2px 2px 4px 1px hsla(180, 90%, 5%, .4);
+  margin: 0 calc(-1 * var(--pad));
+  background: var(--bg);
+  border: 1px solid var(--color-off);
+  box-sizing: border-box;
+}
+.slider:checked {
+  background-color: var(--color-on);
+  justify-content: flex-end;
+}
+.slider:checked::after {
+  border-color: hsla(var(--shadow-hsl), .25);
+  background: var(--accent-2);
+}
+.slider:hover {
+  box-shadow: inset 1px 1px 2px hsla(var(--shadow-hsl), .8);
+}
+.slider:focus {
+  position: relative;
+}
+.slider:focus:not([data-focused-via-click])::before {
+  content: "";
   position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 46px;
-  border-radius: 18px;
-  box-shadow: 0 3px 13px 0 rgba(0, 0, 0, 0.4);
+  width: 100%;
+  height: 100%;
+  left: calc(-2 * var(--pad));
+  padding: calc(var(--pad) + 2px) calc(var(--pad) * 2);
+  box-shadow: var(--focus-shadow);
 }
-
-.onoffswitch input:checked + span {
-  background-color: hsla(165, 45%, 50%, .3);
-}
-
-.onoffswitch input:checked + span, .onoffswitch input:checked + span::before {
-  border-color: #CAEBE3;
-}
-
-.onoffswitch input:checked + span .onoffswitch-inner {
-  margin-left: 0;
-}
-
-.onoffswitch input:checked + span::before {
-  right: 0;
-  background-color: #04BA9F;
-  box-shadow: 3px 6px 18px 0 rgba(0, 0, 0, 0.2);
+:root[data-ui-theme="dark"] .slider {
+  --color-off: hsla(0, 0%, 50%, 0.6);
+  --color-on: hsla(180, 50%, 60%, .3);
 }

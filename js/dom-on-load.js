@@ -1,4 +1,4 @@
-/* global $$ $ $create focusAccessibility getEventKeyName moveFocus */// dom.js
+/* global $$ $ $create focusA11y getEventKeyName moveFocus */// dom.js
 /* global CHROME clamp debounce */// toolbox.js
 /* global msg */
 /* global prefs */
@@ -34,9 +34,8 @@
       }
     }
   }
-  prefs.subscribe('disableAll', () => {
-    $('#disableAll-label').dataset.persist = ''; // avoids hiding if already shown
-  });
+  const elOff = $('#disableAll-label'); // won't hide if already shown
+  if (elOff) prefs.subscribe('disableAll', () => (elOff.dataset.persist = ''));
 
   function changeFocusedInputOnWheel(event) {
     const el = document.activeElement;
@@ -59,22 +58,27 @@
 
   /** Displays a full text tooltip on buttons with ellipsis overflow and no inherent title */
   function addTooltipsToEllipsized() {
-    for (const btn of document.getElementsByTagName('button')) {
-      if (btn.title && !btn.titleIsForEllipsis) {
-        continue;
+    // This is to avoid forced layout calc as the classic mode may have thousands of buttons
+    const xo = new IntersectionObserver(entries => {
+      for (const e of entries) {
+        const btn = e.target;
+        const w = e.boundingClientRect.width;
+        if (!w || btn.preresizeClientWidth === w) {
+          continue;
+        }
+        btn.preresizeClientWidth = w;
+        if (btn.scrollWidth > w) {
+          const text = btn.textContent;
+          btn.title = text.includes('\u00AD') ? text.replace(/\u00AD/g, '') : text;
+          btn.titleIsForEllipsis = true;
+        } else if (btn.title) {
+          btn.title = '';
+        }
       }
-      const width = btn.offsetWidth;
-      if (!width || btn.preresizeClientWidth === width) {
-        continue;
-      }
-      btn.preresizeClientWidth = width;
-      if (btn.scrollWidth > width) {
-        const text = btn.textContent;
-        btn.title = text.includes('\u00AD') ? text.replace(/\u00AD/g, '') : text;
-        btn.titleIsForEllipsis = true;
-      } else if (btn.title) {
-        btn.title = '';
-      }
+      xo.disconnect();
+    });
+    for (const el of document.getElementsByTagName('button')) {
+      if (!el.title || el.titleIsForEllipsis) xo.observe(el);
     }
   }
 
@@ -88,12 +92,12 @@
 
   function keepFocusRingOnTabbing(event) {
     if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      focusAccessibility.lastFocusedViaClick = false;
+      focusA11y.lastFocusedViaClick = false;
       setTimeout(() => {
         let el = document.activeElement;
         if (el) {
           el = el.closest('[data-focused-via-click]');
-          focusAccessibility.toggle(el, false);
+          focusA11y.toggle(el, false);
         }
       });
     }
@@ -130,7 +134,7 @@
       pedal.parentElement.classList.toggle('active');
       pedal.after(menu);
       moveFocus(menu, 0);
-      focusAccessibility.toggle(menu.firstChild, focusAccessibility.get(pedal));
+      focusA11y.toggle(menu.firstChild, focusA11y.get(pedal));
     }
     if (entry) {
       prevPedal.previousElementSibling.dispatchEvent(new CustomEvent('split-btn', {
@@ -148,10 +152,10 @@
   }
 
   function suppressFocusRingOnClick({target}) {
-    const el = focusAccessibility.closest(target);
+    const el = focusA11y.closest(target);
     if (el) {
-      focusAccessibility.lastFocusedViaClick = true;
-      focusAccessibility.toggle(el, true);
+      focusA11y.lastFocusedViaClick = true;
+      focusA11y.toggle(el, true);
     }
   }
 

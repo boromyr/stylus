@@ -1,6 +1,7 @@
 /* global CHROME FIREFOX URLS deepEqual ignoreChromeError */// toolbox.js
 /* global bgReady */// common.js
 /* global msg */
+/* global tabMan */
 'use strict';
 
 /* exported navMan */
@@ -42,10 +43,13 @@ const navMan = (() => {
 
   /** @this {string} type */
   function onFakeNavigation(data) {
-    const {url, frameId: f, documentId: d} = data;
     onNavigation.call(this, data);
-    msg.sendTab(data.tabId, {method: 'urlChanged', url}, d ? {documentId: d} : {frameId: f})
-      .catch(msg.ignoreError);
+    const {tabId} = data;
+    const td = tabMan.get(tabId); if (!td) return;
+    const {url, frameId: f, documentId: d} = data;
+    const iid = !d && (td.iid || {})[f];
+    const to = d ? {documentId: d} : {frameId: f};
+    msg.sendTab(tabId, {method: 'urlChanged', iid, url}, to);
   }
 })();
 
@@ -87,7 +91,7 @@ bgReady.all.then(() => {
   if (FIREFOX) {
     chrome.webNavigation.onDOMContentLoaded.addListener(async ({tabId, frameId}) => {
       if (frameId &&
-          !await msg.sendTab(tabId, {method: 'ping'}, {frameId}).catch(ignoreChromeError)) {
+          !await msg.sendTab(tabId, {method: 'ping'}, {frameId})) {
         for (const file of chrome.runtime.getManifest().content_scripts[0].js) {
           chrome.tabs.executeScript(tabId, {
             frameId,

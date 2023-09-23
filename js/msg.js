@@ -1,4 +1,3 @@
-/* global URLS deepCopy getOwnTab */// toolbox.js - not used in content scripts
 'use strict';
 
 (() => {
@@ -9,58 +8,30 @@
     extension: ['both', 'extension'],
     tab: ['both', 'tab'],
   });
-  const NEEDS_TAB_IN_SENDER = [
-    'getTabUrlPrefix',
-    'updateIconBadge',
-    'styleViaAPI',
-  ];
-  const ERR_NO_RECEIVER = 'Receiving end does not exist';
-  const ERR_PORT_CLOSED = 'The message port closed before';
-  const NULL_RESPONSE = {error: {message: ERR_NO_RECEIVER}};
-  const STACK = 'Callstack before invoking msg.';
   const handler = {
     both: new Set(),
     tab: new Set(),
     extension: new Set(),
   };
+  const loadBg = () => browser.runtime.getBackgroundPage().catch(() => false);
+  const isIgnorableError = RegExp.prototype.test.bind(
+    /Receiving end does not exist|The message port closed before/);
+  const saveStack = () => new Error(); // Saving callstack prior to `await`
+
+  const portReqs = {};
   let bgReadySignal;
   let bgReadying = new Promise(fn => (bgReadySignal = fn));
+  let msgId = 0;
+  /** @type {chrome.runtime.Port} */
+  let port;
 
-  // TODO: maybe move into polyfill.js and hook addListener to wrap/unwrap automatically
+  // TODO: maybe move into browser.js and hook addListener to wrap/unwrap automatically
   chrome.runtime.onMessage.addListener(onRuntimeMessage);
 
-  const msg = window.msg = {
-
-    isBg: getExtBg() === window,
-
-    async broadcast(data) {
-      const requests = [msg.send(data, 'both').catch(msg.ignoreError)];
-      for (const tab of await browser.tabs.query({})) {
-        const url = tab.pendingUrl || tab.url;
-        if (!tab.discarded &&
-            !url.startsWith(URLS.ownOrigin) &&
-            URLS.supported(url)) {
-          requests[tab.active ? 'unshift' : 'push'](
-            msg.sendTab(tab.id, data, null, 'both').catch(msg.ignoreError));
-        }
-      }
-      return Promise.all(requests);
-    },
-
-    broadcastExtension(...args) {
-      return msg.send(...args).catch(msg.ignoreError);
-    },
-
-    isIgnorableError(err) {
-      const text = `${err && err.message || err}`;
-      return text.includes(ERR_NO_RECEIVER) || text.includes(ERR_PORT_CLOSED);
-    },
-
-    ignoreError(err) {
-      if (!msg.isIgnorableError(err)) {
-        console.warn(err);
-      }
-    },
+  /* In chrome-extension:// context `window.msg` is created earlier by another script,
+   * while in a content script it's not, but may exist anyway due to a DOM node with id="msg",
+   * so we check chrome.tabs first to decide whether we can reuse the existing object. */
+  const msg = Object.assign(chrome.tabs ? window.msg : window.msg = {}, /** @namespace msg */ {
 
     on(fn) {
       handler.both.add(fn);
@@ -80,24 +51,12 @@
       }
     },
 
-    async send(data, target = 'extension') {
-      const err = new Error(`${STACK}send:`); // Saving callstack prior to `await`
-      return unwrap(err, await browser.runtime.sendMessage({data, target}));
-    },
+    sendTab: async (tabId, data, options, target = 'tab') => unwrap(
+      browser.tabs.sendMessage(tabId, {data, target}, options)),
 
-    async sendTab(tabId, data, options, target = 'tab') {
-      const err = new Error(`${STACK}sendTab:`); // Saving callstack prior to `await`
-      return unwrap(err, await browser.tabs.sendMessage(tabId, {data, target}, options));
-    },
-
-    _execute(types, ...args) {
+    _execute(target, ...args) {
       let result;
-      if (!(args[0] instanceof Object)) {
-        /* Data from other windows must be deep-copied to allow for GC in Chrome and
-           merely survive in FF as it kills cross-window objects when their tab is closed. */
-        args = args.map(deepCopy);
-      }
-      for (const type of types) {
+      for (const type of TARGETS[target] || TARGETS.all) {
         for (const fn of handler[type]) {
           let res;
           try {
@@ -112,24 +71,74 @@
       }
       return result;
     },
-  };
+    _unwrap: unwrap,
+    _wrapError: wrapError,
+  });
 
-  function getExtBg() {
-    const fn = chrome.extension.getBackgroundPage;
-    const bg = fn && fn();
-    return bg === window || bg && (bg.msg || {}).ready ? bg : null;
+  async function apiSend(data) {
+    const id = ++msgId;
+    const err = saveStack();
+    if (!port) {
+      port = chrome.runtime.connect({name: 'api'});
+      port.onMessage.addListener(apiPortResponse);
+      port.onDisconnect.addListener(apiPortDisconnect);
+    }
+    port.postMessage({id, data});
+    return new Promise((ok, ko) => (portReqs[id] = {ok, ko, err}));
+  }
+
+  function apiPortCancel() {
+    delete this.cancel;
+    port.disconnect();
+    port = null;
+  }
+
+  function apiPortDisconnect() {
+    const error = chrome.runtime.lastError;
+    if (error) for (const id in portReqs) apiPortResponse({id, error});
+    port = null;
+  }
+
+  function apiPortResponse({id, data, error}) {
+    const req = portReqs[id];
+    delete portReqs[id];
+    if (error) {
+      const {err} = req;
+      err.message = error.message;
+      if (error.stack) err.stack = error.stack + '\n' + err.stack;
+      req.ko(error);
+    } else {
+      req.ok(data);
+    }
   }
 
   function onRuntimeMessage({data, target}, sender, sendResponse) {
-    if (bgReadying && data && data.method === 'backgroundReady') {
-      bgReadySignal();
+    if (data.method === 'backgroundReady') {
+      if (bgReadySignal) bgReadySignal(true);
+      if (port) apiPortDisconnect();
     }
-    const res = msg._execute(TARGETS[target] || TARGETS.all, data, sender);
+    const res = msg._execute(target, data, sender);
     if (res instanceof Promise) {
       res.then(wrapData, wrapError).then(sendResponse);
       return true;
     }
     if (res !== undefined) sendResponse(wrapData(res));
+  }
+
+  async function unwrap(promise) {
+    const err = saveStack();
+    let data, error;
+    try {
+      ({data, error} = await promise || {});
+    } catch (e) {
+      error = e;
+    }
+    if (!error || isIgnorableError(error)) {
+      return data;
+    }
+    err.message = error.message;
+    if (error.stack) err.stack = error.stack + '\n' + err.stack;
+    return Promise.reject(err);
   }
 
   function wrapData(data) {
@@ -145,54 +154,40 @@
     };
   }
 
-  function unwrap(localErr, {data, error} = NULL_RESPONSE) {
-    return error
-      ? Promise.reject(Object.assign(localErr, error, error.stack && {
-        stack: `${error.stack}\n${localErr.stack}`,
-      }))
-      : data;
-  }
-
   async function sendRetry(m) {
     try {
-      return await msg.send(m);
+      return await apiSend(m);
     } catch (e) {
-      if (!bgReadying || !msg.isIgnorableError(e)) {
-        return Promise.reject(e);
-      }
-      await bgReadying;
-      return msg.send(m);
+      return bgReadying && isIgnorableError(e)
+        ? await bgReadying && apiSend(m)
+        : Promise.reject(e);
     } finally {
       // Assuming bg is ready if messaging succeeded
       bgReadying = bgReadySignal = null;
     }
   }
 
-  const apiHandler = !msg.isBg && {
+  if (msg.bg === window) return;
+
+  const apiApply = async (path, args) => {
+    const {bg = msg.bg = chrome.tabs && await loadBg() || false} = msg;
+    const message = {method: 'invokeAPI', path, args};
+    return bg && ((bg.msg || {}).ready || await bg.bgReady.all) ? msg.invokeAPI(path, message)
+      : bgReadying ? sendRetry(message)
+        : apiSend(message);
+  };
+
+  const apiHandler = {
     get({path}, name) {
       const fn = () => {};
       fn.path = [...path, name];
       return new Proxy(fn, apiHandler);
     },
-    async apply({path}, thisObj, args) {
-      const bg = getExtBg() ||
-        chrome.tabs && await browser.runtime.getBackgroundPage().catch(() => {});
-      const message = {method: 'invokeAPI', path, args};
-      let res;
-      // content scripts, probably private tabs, and our extension tab during Chrome startup
-      if (!bg || !bg.msg || !bg.msg.ready && await bg.bgReady.all && false) {
-        res = bgReadying ? sendRetry(message) : msg.send(message);
-      } else {
-        res = deepCopy(await bg.msg._execute(TARGETS.extension, message, {
-          // Using a fake id for our Options frame as we want to fetch styles early
-          frameId: window === top ? 0 : 1,
-          tab: NEEDS_TAB_IN_SENDER.includes(path.join('.')) && await getOwnTab(),
-          url: location.href,
-        }));
-      }
-      return res;
+    apply({path}, thisObj, args) {
+      const p = apiApply(path, args);
+      p.cancel = apiPortCancel.bind(p);
+      return p;
     },
   };
-  /** @type {API} */
-  window.API = msg.isBg ? {} : new Proxy({path: []}, apiHandler);
+  window.API = /** @type {API} */ new Proxy({path: []}, apiHandler);
 })();

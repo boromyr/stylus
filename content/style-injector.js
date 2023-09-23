@@ -1,14 +1,23 @@
 'use strict';
 
-/** @type {function(opts):StyleInjector} */
+{
+  let x;
+  window.isFrame = x = window !== parent;
+  if (x) try { x = !!(Object.getOwnPropertyDescriptor(parent.location, 'href') || {}).get; } catch (e) { x = false; }
+  window.isFrameSameOrigin = x;
+  window.isFrameNoUrl = x && location.protocol === 'about:';
+}
+
 window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
   compare,
   onUpdate = () => {},
 }) => {
+  const isExt = !!chrome.tabs;
   const PREFIX = 'stylus-';
   const PATCH_ID = 'transition-patch';
   // styles are out of order if any of these elements is injected between them
-  const ORDERED_TAGS = new Set(['head', 'body', 'frameset', 'style', 'link']);
+  // except `style` on our own page as it contains overrides
+  const ORDERED_TAGS = new Set(['head', 'body', 'frameset', !isExt && 'style', 'link']);
   const docRewriteObserver = RewriteObserver(sort);
   const docRootObserver = RootObserver(sortIfNeeded);
   const toSafeChar = c => String.fromCharCode(0xFF00 + c.charCodeAt(0) - 0x20);
@@ -20,25 +29,23 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
   // will store the original method refs because the page can override them
   let creationDoc, createElement, createElementNS;
 
-  return /** @namespace StyleInjector */ {
+  return {
 
     list,
 
-    async apply(styleMap) {
-      const styles = styleMapToArray(styleMap);
-      const value = !styles.length
-        ? []
-        : await docRootObserver.evade(() => {
+    apply({cfg, sections: styles}) {
+      if (cfg) exposeStyleName = cfg.name;
+      return styles.length
+        && docRootObserver.evade(() => {
           if (!isTransitionPatched && isEnabled) {
             applyTransitionPatch(styles);
           }
           return styles.map(addUpdate);
-        });
-      emitUpdate();
-      return value;
+        }).then(emitUpdate);
     },
 
     clear() {
+      if (!list.length) return;
       addRemoveElements(false);
       list.length = 0;
       table.clear();
@@ -55,12 +62,11 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     },
 
     remove(id) {
-      remove(id);
-      emitUpdate();
+      if (remove(id)) emitUpdate();
     },
 
-    replace(styleMap) {
-      const styles = styleMapToArray(styleMap);
+    replace({cfg, sections: styles}) {
+      if (cfg) exposeStyleName = cfg.name;
       const added = new Set(styles.map(s => s.id));
       const removed = [];
       for (const style of list) {
@@ -115,7 +121,7 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     // the browsers, especially Firefox, may apply all transitions on page load
     if (document.readyState === 'complete' ||
         document.visibilityState === 'hidden' ||
-        !styles.some(s => s.code.includes('transition'))) {
+        !styles.some(s => s.code.some(c => c.includes('transition')))) {
       return;
     }
     const el = createStyle({id: PATCH_ID, code: `
@@ -129,7 +135,12 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     requestAnimationFrame(() => setTimeout(() => el.remove()));
   }
 
-  function createStyle(style = {}) {
+  /** @this {Array} array to compare to */
+  function arrItemDiff(c, i) {
+    return c !== this[i];
+  }
+
+  function createStyle(style) {
     const {id} = style;
     if (!creationDoc) initCreationDoc();
     let el;
@@ -155,13 +166,22 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     return el;
   }
 
-  function setTextAndName(el, {id, code = '', name}) {
+  function setTextAndName(el, {id, code, name}) {
     if (exposeStyleName && name) {
       el.dataset.name = name;
       name = encodeURIComponent(name.replace(/[?#/']/g, toSafeChar));
-      code += `\n/*# sourceURL=${chrome.runtime.getURL(name)}.user.css#${id} */`;
+      code = code.concat(`\n/*# sourceURL=${chrome.runtime.getURL(name)}.user.css#${id}${
+        window !== top ? '#' + Math.random().toString(36).slice(2) : '' // https://crbug.com/1298600
+      } */`);
     }
-    el.textContent = code;
+    let i, len, n;
+    for (i = 0, len = code.length, n = el.firstChild; n; i++, n = n.nextSibling) {
+      /* The surplus nodes are cleared to trigger the less frequently observed `characterData` mutations,
+         and anyway it's often due to a typo/mistake while editing, which will be fixed soon */
+      if (i >= len) n.nodeValue = '';
+      else if (n.nodeValue !== code[i]) n.nodeValue = code[i];
+    }
+    if (i < len) el.append(...code.slice(i));
   }
 
   function toggleObservers(shouldStart) {
@@ -186,7 +206,7 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     creationDoc = !Event.prototype.getPreventDefault && document.wrappedJSObject;
     if (creationDoc) {
       ({createElement, createElementNS} = creationDoc);
-      const el = document.documentElement.appendChild(createStyle());
+      const el = document.documentElement.appendChild(createStyle({code: ''}));
       const isApplied = el.sheet;
       el.remove();
       if (isApplied) return;
@@ -201,6 +221,7 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     table.delete(id);
     list.splice(list.indexOf(style), 1);
     style.el.remove();
+    return true;
   }
 
   function sort() {
@@ -235,26 +256,16 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     return needsSort;
   }
 
-  function styleMapToArray(styleMap) {
-    if (styleMap.cfg) {
-      ({exposeStyleName} = styleMap.cfg);
-      delete styleMap.cfg;
-    }
-    return Object.values(styleMap).map(({id, code, name}) => ({
-      id,
-      name,
-      code: code.join(''),
-    }));
-  }
-
   function update(newStyle) {
     const {id, code} = newStyle;
     const style = table.get(id);
-    if (style.code !== code ||
+    if (style.code.length !== code.length ||
+        style.code.some(arrItemDiff, code) ||
         style.name !== newStyle.name && exposeStyleName) {
       style.code = code;
       setTextAndName(style.el, newStyle);
     }
+
   }
 
   function RewriteObserver(onChange) {
@@ -266,7 +277,7 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     return {start, stop};
 
     function start() {
-      if (observing) return;
+      if (observing || isExt) return;
       // detect dynamic iframes rewritten after creation by the embedder i.e. externally
       root = document.documentElement;
       timer = setTimeout(check);
@@ -275,7 +286,7 @@ window.StyleInjector = window.INJECTED === 1 ? window.StyleInjector : ({
     }
 
     function stop() {
-      if (!observing) return;
+      if (!observing || isExt) return;
       clearTimeout(timer);
       observer.disconnect();
       observing = false;

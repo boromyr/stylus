@@ -1,4 +1,4 @@
-/* global $ $$ $create getEventKeyName setupLivePrefs */// dom.js
+/* global $ $$ $create $remove getEventKeyName setupLivePrefs */// dom.js
 /* global ABOUT_BLANK getStyleDataMerged preinit */// preinit.js
 /* global API msg */// msg.js
 /* global Events */
@@ -8,20 +8,27 @@
   CHROME
   CHROME_POPUP_BORDER_BUG
   FIREFOX
+  UA
   URLS
   capitalize
   clamp
+  clipString
   getActiveTab
   isEmptyObj
+  stringAsRegExpStr
 */// toolbox.js
 'use strict';
 
 let tabURL;
 let isBlocked;
+let styleFinder;
 
 /** @type Element */
 const installed = $('#installed');
+const WRITE_FRAME_SEL = '.match:not([data-frame-id="0"]):not(.dupe)';
 const ENTRY_ID_PREFIX_RAW = 'style-';
+const EXT_NAME = `<${chrome.runtime.getManifest().name}>`;
+const xo = new IntersectionObserver(onIntersect);
 const $entry = styleOrId => $(`#${ENTRY_ID_PREFIX_RAW}${styleOrId.id || styleOrId}`);
 
 preinit.then(({frames, styles, url}) => {
@@ -38,10 +45,11 @@ preinit.then(({frames, styles, url}) => {
 msg.onExtension(onRuntimeMessage);
 
 prefs.subscribe('popup.stylesFirst', (key, stylesFirst) => {
+  $.rootCL.toggle('styles-first', stylesFirst);
   $.rootCL.toggle('styles-last', !stylesFirst);
-}, {runNow: true});
+}, true);
 if (CHROME_POPUP_BORDER_BUG) {
-  prefs.subscribe('popup.borders', toggleSideBorders, {runNow: true});
+  prefs.subscribe('popup.borders', toggleSideBorders, true);
 }
 if (CHROME >= 66 && CHROME <= 69) { // Chrome 66-69 adds a gap, https://crbug.com/821143
   document.head.appendChild($create('style', 'html { overflow: overlay }'));
@@ -52,7 +60,7 @@ if (CHROME >= 107) {
 
 function onRuntimeMessage(msg) {
   if (!tabURL) return;
-  let ready = Promise.resolve();
+  let ready;
   switch (msg.method) {
     case 'styleAdded':
     case 'styleUpdated':
@@ -60,10 +68,10 @@ function onRuntimeMessage(msg) {
       ready = handleUpdate(msg);
       break;
     case 'styleDeleted':
-      handleDelete(msg.style.id);
+      $remove($entry(msg.style.id));
       break;
   }
-  ready.then(() => dispatchEvent(new CustomEvent(msg.method, {detail: msg})));
+  if (styleFinder) styleFinder.on(msg, ready);
 }
 
 function setPopupWidth(_key, width) {
@@ -85,7 +93,7 @@ function toggleSideBorders(_key, state) {
 
 /** @param {chrome.webNavigation.GetAllFrameResultDetails[]} frames */
 async function initPopup(frames) {
-  prefs.subscribe('popupWidth', setPopupWidth, {runNow: true});
+  prefs.subscribe('popupWidth', setPopupWidth, true);
   setupLivePrefs();
 
   const elFind = $('#find-styles-btn');
@@ -101,11 +109,11 @@ async function initPopup(frames) {
   elFind.on('click', async () => {
     elFind.disabled = true;
     await elFindDeps();
-    Events.searchInline();
+    styleFinder.inline();
   });
   elFind.on('split-btn', async e => {
     await elFindDeps();
-    Events.searchSite(e);
+    styleFinder.inSite(e);
   });
   window.on('keydown', e => {
     if (getEventKeyName(e) === 'Ctrl-F') {
@@ -124,31 +132,13 @@ async function initPopup(frames) {
     window.close();
   };
 
-  $('#confirm').onclick = function (e) {
-    const {id} = this.dataset;
-    switch (e.target.dataset.cmd) {
-      case 'ok':
-        Events.hideModal(this, {animate: true});
-        API.styles.delete(Number(id));
-        break;
-      case 'cancel':
-        Events.showModal($('.menu', $entry(id)), '.menu-close');
-        break;
-    }
-  };
-
   for (const el of $$('link[media=print]')) {
     el.removeAttribute('media');
   }
 
-  if (!tabURL) {
-    blockPopup();
-    return;
-  }
-
   frames.forEach(createWriterElement);
 
-  if (frames.length > 1 && $('.match .match:not(.dupe)')) {
+  if ($(WRITE_FRAME_SEL)) {
     $('#write-style').append(Object.assign(t.template.writeForFrames, {
       onclick() {
         this.remove();
@@ -157,15 +147,21 @@ async function initPopup(frames) {
     }));
   }
 
-  const isStore = tabURL.startsWith(URLS.browserWebStore);
-  if (isStore && !FIREFOX) {
+  const isStore = FIREFOX ? tabURL.startsWith('https://addons.mozilla.org/') :
+      UA.opera ? tabURL.startsWith('https://addons.opera.com/') :
+        tabURL.startsWith('https://chrome.google.com/webstore/') ||
+        tabURL.startsWith('https://chromewebstore.google.com/');
+  if (isStore) {
+    blockPopup();
+  } else if (!URLS.supported(tabURL)) {
     blockPopup();
     return;
   }
 
   for (let retryCountdown = 10; retryCountdown-- > 0;) {
     const tab = await getActiveTab();
-    if (await msg.sendTab(tab.id, {method: 'ping'}, {frameId: 0}).catch(() => {})) {
+    if (await msg.sendTab(tab.id, {method: 'ping'}, {frameId: 0})) {
+      if (isBlocked) blockPopup(false);
       return;
     }
     if (tab.status === 'complete' && (!FIREFOX || tab.url !== ABOUT_BLANK)) {
@@ -176,10 +172,8 @@ async function initPopup(frames) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
 
-  initUnreachable(isStore);
-}
+  if (CHROME && isStore) return;
 
-function initUnreachable(isStore) {
   const info = t.template.unreachableInfo;
   if (!FIREFOX) {
     // Chrome "Allow access to file URLs" in chrome://extensions message
@@ -194,7 +188,6 @@ function initUnreachable(isStore) {
     const renderToken = s => s[0] === '<'
       ? $create('a.copy', {
         textContent: s.slice(1, -1),
-        onclick: Events.copyContent,
         tabIndex: 0,
         title: t('copy'),
       })
@@ -208,7 +201,9 @@ function initUnreachable(isStore) {
     info.appendChild($create('p', t('InaccessibleFileHint')));
   }
   document.body.classList.add('unreachable');
-  document.body.insertBefore(info, document.body.firstChild);
+  const elInfo = $('.blocked-info');
+  if (elInfo) elInfo.replaceWith(info);
+  else document.body.prepend(info);
 }
 
 /**
@@ -217,77 +212,56 @@ function initUnreachable(isStore) {
  */
 function createWriterElement(frame, index) {
   const {url, frameId, parentFrameId, isDupe} = frame;
-  const targets = $create('span');
-  const elFor = !index ? $('#write-style-for') : {};
-  // For this URL
-  const urlLink = t.template.writeStyle.cloneNode(true);
-  const isAboutBlank = url.startsWith('about:');
-  Object.assign(urlLink, {
-    href: 'edit.html?url-prefix=' + encodeURIComponent(url),
-    title: elFor.title = `url-prefix("${url}")`,
-    tabIndex: isAboutBlank ? -1 : 0,
-    textContent: prefs.get('popup.breadcrumbs.usePath')
-      ? t.breakWord(new URL(url).pathname.slice(1))
-      : frameId
-        ? isAboutBlank ? url : 'URL'
-        : t('writeStyleForURL').replace(/ /g, '\u00a0'), // this&nbsp;URL
-    onclick: elFor.onclick = e => Events.openEditor(e, {'url-prefix': url}),
-  });
-  if (prefs.get('popup.breadcrumbs')) {
-    urlLink.onmouseenter =
-      urlLink.onfocus = () => urlLink.parentNode.classList.add('url()');
-    urlLink.onmouseleave =
-      urlLink.onblur = () => urlLink.parentNode.classList.remove('url()');
+  const isAbout = url.startsWith('about:');
+  const crumbs = [];
+  let el;
+  if (isAbout) {
+    el = $create('span', url);
+  } else {
+    el = (url.startsWith(URLS.ownOrigin) ? makeExtCrumbs : makeWebCrumbs)(crumbs, url);
+    el.onmouseenter = el.onmouseleave = el.onfocus = el.onblur = Events.toggleUrlLink;
+    if (!index) Object.assign($('#write-style-for'), {onclick: Events.openEditor, title: el.title});
   }
-  targets.appendChild(urlLink);
-
-  // For domain
-  const domains = getDomains(url);
-  for (const domain of domains) {
-    const numParts = domain.length - domain.replace(/\./g, '').length + 1;
-    // Don't include TLD
-    if (domains.length > 1 && numParts === 1) {
-      continue;
-    }
-    const domainLink = t.template.writeStyle.cloneNode(true);
-    Object.assign(domainLink, {
-      href: 'edit.html?domain=' + encodeURIComponent(domain),
-      textContent: t.breakWord(numParts > 2 ? domain.split('.')[0] : domain),
-      title: `domain("${domain}")`,
-      onclick: e => Events.openEditor(e, {domain}),
-    });
-    domainLink.setAttribute('subdomain', numParts > 1 ? 'true' : '');
-    targets.appendChild(domainLink);
-  }
-
-  if (prefs.get('popup.breadcrumbs')) {
-    targets.classList.add('breadcrumbs');
-    targets.appendChild(urlLink); // making it the last element
-  }
-
+  crumbs.push(el);
   const root = $('#write-style');
   const parent = $(`[data-frame-id="${parentFrameId}"]`, root) || root;
-  const child = $create({
-    tag: 'span',
-    className: `match${isDupe ? ' dupe' : ''}${isAboutBlank ? ' about-blank' : ''}`,
+  const child = $create(`.match${isDupe ? '.dupe' : ''}${isAbout ? '.about-blank' : ''}`, {
     dataset: {frameId},
-    appendChild: targets,
-  });
+  }, $create('.breadcrumbs', crumbs));
   parent.appendChild(child);
   parent.dataset.children = (Number(parent.dataset.children) || 0) + 1;
 }
 
-function getDomains(url) {
-  let d = url.split(/[/:]+/, 2)[1];
-  if (!d || url.startsWith('file:')) {
-    return [];
+function makeExtCrumbs(crumbs, url) {
+  const key = 'regexp';
+  const all = '^\\w+-extension://';
+  const page = url.slice(URLS.ownOrigin.length, url.indexOf('.html'));
+  crumbs.push(makeCrumb(key, all + '.+', EXT_NAME, EXT_NAME, true));
+  return makeCrumb(key, `${all}[^/]+/${stringAsRegExpStr(page)}.*`, EXT_NAME, page + '.*');
+}
+
+function makeWebCrumbs(crumbs, url) {
+  const i = url.indexOf('://');
+  const host = i < 0 ? url : url.slice(i + 3, url.indexOf('/', i + 3));
+  const tail = i < 0 ? '' : url.slice(i + 3 + host.length + 1);
+  for (let domain, d, j = 0; // show `tld` part only if it's the entire host e.g. localhost
+       (domain = host.slice(j)) && ((d = domain.split('.'))[1] || !j);) {
+    d = d[2] ? d[0] : domain; // kinda strip the public suffix lol
+    crumbs.push(makeCrumb('domain', domain, '', d, true));
+    j = host.indexOf('.', j + 1) + 1 || host.length;
   }
-  const domains = [d];
-  while (d.includes('.')) {
-    d = d.substring(d.indexOf('.') + 1);
-    domains.push(d);
-  }
-  return domains;
+  return makeCrumb('url-prefix', url, '', clipString(tail) || t('writeStyleForURL'));
+}
+
+function makeCrumb(key, val, name, body, isDomain) {
+  const sp = {[key]: val};
+  if (name) sp.name = name;
+  return $create('a.write-style-link', {
+    href: 'edit.html?' + new URLSearchParams(sp),
+    onclick: Events.openEditor,
+    title: `${key}("${val}")`,
+    attributes: isDomain && {subdomain: ''},
+  }, body);
 }
 
 function sortStyles(entries) {
@@ -312,142 +286,90 @@ function showStyles(frameResults) {
   });
   if (entries.size) {
     resortEntries([...entries.values()]);
-  } else {
-    installed.appendChild(t.template.noStyles);
   }
-  const zebra = $('.entry:last-child:nth-child(odd)') &&
-  !$('.styles-last') ? 'reverse-zebra' : 'zebra';
-  $('#installed').classList.add(`${zebra}`);
   require(['/popup/hotkeys']);
 }
 
 function resortEntries(entries) {
   // `entries` is specified only at startup, after that we respect the prefs
   if (entries || prefs.get('popup.autoResort')) {
-    installed.append(...sortStyles(entries || $$('.entry', installed)));
+    installed.append(...sortStyles(entries || [...installed.children]));
   }
 }
 
-function createStyleElement(style) {
-  let entry = $entry(style);
-  if (!entry) {
+function createStyleElement(style, entry) {
+  if (entry) {
+    style = Object.assign(entry.styleMeta, style);
+  } else {
     entry = t.template.style.cloneNode(true);
     Object.assign(entry, {
       id: ENTRY_ID_PREFIX_RAW + style.id,
       styleId: style.id,
-      styleIsUsercss: Boolean(style.usercssData),
-      onmousedown: Events.maybeEdit,
       styleMeta: style,
+      onmousedown: Events.maybeEdit,
     });
-    Object.assign($('input', entry), {
-      onclick: Events.toggleState,
-    });
-    Object.assign($('.style-edit-link', entry), {
-      onclick: e => Events.openEditor(e, {id: style.id}),
-    });
-    const styleName = $('.style-name', entry);
-    Object.assign(styleName, {
-      htmlFor: ENTRY_ID_PREFIX_RAW + style.id,
-      onclick: Events.name,
-    });
-    styleName.appendChild(document.createTextNode(' '));
+  }
+  const {enabled, frameUrl, usercssData: UCD} = style;
+  const name = $('.style-name', entry);
+  const cfg = $('.configure', entry);
+  const cfgUrl = UCD ? '' : style.url;
+  const cls = entry.classList;
 
-    const config = $('.configure', entry);
-    config.onclick = Events.configure;
-    if (!style.usercssData) {
-      if (style.updateUrl && style.updateUrl.includes('?') && style.url) {
-        config.href = style.url;
-        config.target = '_blank';
-        config.title = t('configureStyleOnHomepage');
-        config._sendMessage = {method: 'openSettings'};
-        $('i', config).className = 'i-external';
-      } else {
-        config.classList.add('hidden');
-      }
-    } else if (isEmptyObj(style.usercssData.vars)) {
-      config.classList.add('hidden');
-    }
+  cls.toggle('disabled', !enabled);
+  cls.toggle('enabled', enabled);
+  cls.toggle('force-applied', style.included);
+  cls.toggle('not-applied', style.excluded || style.sloppy || style.excludedScheme);
+  cls.toggle('regexp-partial', style.sloppy);
+  cls.toggle('frame', !!frameUrl);
 
-    $('.delete', entry).onclick = Events.delete;
+  $('input', entry).checked = enabled;
 
-    const indicator = t.template.regexpProblemIndicator.cloneNode(true);
-    indicator.appendChild(document.createTextNode('!'));
-    indicator.onclick = Events.indicator;
-    $('.main-controls', entry).appendChild(indicator);
+  name.$entry = entry;
+  name.lastChild.textContent = style.customName || style.name;
 
-    $('.menu-button', entry).onclick = Events.toggleMenu;
-    $('.menu-close', entry).onclick = Events.toggleMenu;
-
-    $('.exclude-by-domain-checkbox', entry).onchange = e => Events.toggleExclude(e, 'domain');
-    $('.exclude-by-url-checkbox', entry).onchange = e => Events.toggleExclude(e, 'url');
+  cfg.hidden = UCD ? isEmptyObj(UCD.vars) : !style.url || !`${style.updateUrl}`.includes('?');
+  if (!cfg.hidden && cfg.href !== cfgUrl) {
+    const el = t.template[UCD ? 'config' : 'configExternal'].cloneNode(true);
+    if (cfgUrl) el.href = cfgUrl;
+    else el.removeAttribute('href');
+    cfg.replaceWith(el);
   }
 
-  style = Object.assign(entry.styleMeta, style);
-
-  entry.classList.toggle('disabled', !style.enabled);
-  entry.classList.toggle('enabled', style.enabled);
-  $('input', entry).checked = style.enabled;
-
-  const styleName = $('.style-name', entry);
-  styleName.lastChild.textContent = style.customName || style.name;
-  setTimeout(() => {
-    styleName.title =
-      entry.styleMeta.sloppy ? t('styleNotAppliedRegexpProblemTooltip') :
-      entry.styleMeta.excludedScheme ? t(`styleNotAppliedScheme${capitalize(entry.styleMeta.preferScheme)}`) :
-      styleName.scrollWidth > styleName.clientWidth + 1 ? styleName.textContent :
-      '';
-  });
-
-  entry.classList.toggle('force-applied', style.included);
-  entry.classList.toggle('not-applied', style.excluded || style.sloppy || style.excludedScheme);
-  entry.classList.toggle('regexp-partial', style.sloppy);
-
-  $('.exclude-by-domain-checkbox', entry).checked = Events.isStyleExcluded(style, 'domain');
-  $('.exclude-by-url-checkbox', entry).checked = Events.isStyleExcluded(style, 'url');
-
-  $('.exclude-by-domain', entry).title = Events.getExcludeRule('domain');
-  $('.exclude-by-url', entry).title = Events.getExcludeRule('url');
-
-  const {frameUrl} = style;
   if (frameUrl) {
     const sel = 'span.frame-url';
-    const frameEl = $(sel, entry) || styleName.insertBefore($create(sel), styleName.lastChild);
+    const frameEl = $(sel, entry) || name.insertBefore($create(sel), name.lastChild);
     frameEl.title = frameUrl;
     frameEl.onmousedown = Events.maybeEdit;
   }
-  entry.classList.toggle('frame', Boolean(frameUrl));
 
+  xo.observe(name);
   return entry;
 }
 
+/** @param {IntersectionObserverEntry[]} results */
+function onIntersect(results) {
+  for (const {target: $name, boundingClientRect: r} of results) {
+    const style = $name.$entry.styleMeta;
+    $name.title = style.sloppy ? t('styleNotAppliedRegexpProblemTooltip') :
+      style.excludedScheme ? t(`styleNotAppliedScheme${capitalize(style.preferScheme)}`) :
+        $name.scrollWidth > r.width + 1 ? $name.textContent :
+          '';
+  }
+}
+
 async function handleUpdate({style, reason}) {
-  if (reason !== 'toggle' || !$entry(style)) {
+  const entry = $entry(style);
+  if (reason !== 'toggle' || !entry) {
     style = await getStyleDataMerged(tabURL, style.id);
     if (!style) return;
   }
-  const el = createStyleElement(style);
-  if (!el.parentNode) {
-    installed.appendChild(el);
-    blockPopup(false);
-  }
+  const el = createStyleElement(style, entry);
+  if (!el.isConnected) installed.append(el);
   resortEntries();
-}
-
-function handleDelete(id) {
-  const el = $entry(id);
-  if (el) {
-    el.remove();
-    if (!$('.entry')) installed.appendChild(t.template.noStyles);
-  }
 }
 
 function blockPopup(val = true) {
   isBlocked = val;
-  document.body.classList.toggle('blocked', isBlocked);
-  if (isBlocked) {
-    document.body.prepend(t.template.unavailableInfo);
-  } else {
-    t.template.unavailableInfo.remove();
-    t.template.noStyles.remove();
-  }
+  $.rootCL.toggle('blocked', isBlocked);
+  $('#write-wrapper').classList.toggle('hidden', !$(WRITE_FRAME_SEL));
 }

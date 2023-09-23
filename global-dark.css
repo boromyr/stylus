@@ -16,14 +16,20 @@
     --c85: hsl(0, 0%, 23.75%);
     --c90: hsl(0, 0%, 20.5%);
     --c95: hsl(0, 0%, 17.25%);
+    --c98: hsl(0, 0%, 15.3%);
+    --c99: hsl(0, 0%, 14.65%);
     --c100: hsl(0, 0%, 14%);
     /* min/max are exposed in case we want to use an overdrive color for emphasis */
     --cmin: hsl(0, 0%, 100%);
     --cmax: hsl(0, 0%, 0%);
-    --accent-1: hsl(180, 100%, 95%);
+    --accent-1: hsl(180, 50%, 65%);
+    --accent-2: hsl(180, 45%, 40%);
     --accent-3: hsl(180, 30%, 18%);
     --input-bg: var(--c95);
     --red1: hsl(0, 85%, 55%);
+  }
+  button {
+    background: linear-gradient(var(--c85), var(--c90));
   }
   textarea,
   input[type=url],
@@ -42,9 +48,6 @@
   }
   select {
     background-color: var(--bg);
-  }
-  .onoffswitch {
-    --knob: var(--c50);
   }
   .CodeMirror-scrollbar-filler,
   .CodeMirror-gutter-filler {

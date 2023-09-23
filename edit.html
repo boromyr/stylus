@@ -9,13 +9,13 @@
     <link href="global-dark.css" rel="stylesheet">
     <style id="cm-theme"></style>
 
-    <script src="js/polyfill.js"></script>
+    <script src="content/style-injector.js"></script>
+    <script src="js/browser.js"></script>
     <script src="js/toolbox.js"></script>
     <script src="js/msg.js"></script>
     <script src="js/prefs.js"></script>
     <script src="js/dom.js"></script>
     <script src="js/localization.js"></script>
-    <script src="content/style-injector.js"></script>
     <script src="content/apply.js"></script>
 
     <script src="js/sections-util.js"></script>
@@ -91,7 +91,6 @@
 
     <template data-id="section">
       <div class="section">
-        <!-- not using DIV to make our CSS work for #sections > div:only-of-type .remove-section -->
         <p class="deleted-section">
           <button class="restore-section" i18n="sectionRestore"></button>
         </p>
@@ -423,7 +422,7 @@
   </template>
 
   <link href="edit/edit.css" rel="stylesheet">
-  <script src="js/dark-themer.js"></script> <!-- must be last in HEAD to avoid FOUC -->
+  <script src="js/themer.js"></script> <!-- must be last in HEAD to avoid FOUC -->
 </head>
 
 <body id="stylus-edit">

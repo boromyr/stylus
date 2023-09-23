@@ -19,6 +19,7 @@ const AGES = [
 ];
 const groupThousands = num => `${num}`.replace(/\d(?=(\d{3})+$)/g, '$&\xA0');
 const renderSize = size => groupThousands(Math.round(size / 1024)) + 'k';
+const nameLengths = new Map();
 
 (() => {
   const proto = HTMLImageElement.prototype;
@@ -227,6 +228,7 @@ function createTargetsElement({entry, expanded, style = entry.styleMeta}) {
   entry.classList.toggle('global', !numTargets);
   entry._allTargetsRendered = allTargetsRendered;
   entry._numTargets = numTargets;
+  entry.style.setProperty('--num-targets', Math.min(numTargets, newUI.targets));
 }
 
 async function getFaviconSrc(container = installed) {
@@ -244,7 +246,7 @@ async function getFaviconSrc(container = installed) {
     let favicon = '';
     if (type === 'domains') {
       favicon = targetValue;
-    } else if (targetValue.includes('chrome-extension:') || targetValue.includes('moz-extension:')) {
+    } else if (/-extension:\\?\//.test(targetValue)) {
       favicon = OWN_ICON;
     } else if (type === 'regexps') {
       favicon = targetValue
@@ -307,30 +309,36 @@ async function initBadFavs() {
   const showOpts = function (evt) {
     if (evt.button || this[1]) return;
     const opts = this._opts;
-    const elems = [...opts.values()];
-    const i = elems.indexOf(opts.get(this.value));
+    const elems = Object.values(opts);
+    const i = elems.indexOf(opts[this.value]);
     this.style.width = this.offsetWidth + 'px';
     if (i > 0) this.prepend(...elems.slice(0, i));
     this.append(...elems.slice(i + 1));
   };
 
   window.fitSelectBox = (el, value, init) => {
-    const opts = el._opts || (el._opts = new Map());
+    const opts = el._opts || (el._opts = {});
     if (init) {
-      for (const o of el.options) opts.set(o.value, o);
+      for (const o of el.options) opts[o.value] = o;
       el.on('keydown', showOpts);
       el.on('mousedown', showOpts);
       el.on('blur', hideOpts);
       el.on('input', hideOpts);
-    }
-    if (typeof value !== 'string') value = `${value}`;
-    const opt = opts.get(value);
-    if (!opt.isConnected) {
-      if (el[0]) el[0].replaceWith(opt);
-      else el.append(opt);
+      const d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+      Object.defineProperty(el, 'value', {
+        get: d.get,
+        set: val => {
+          const opt = opts[typeof val === 'string' ? val : val = `${val}`];
+          if (!opt.isConnected) {
+            if (el[0]) el[0].replaceWith(opt);
+            else el.append(opt);
+          }
+          d.set.call(el, val);
+          hideOpts.call(el, {});
+        },
+      });
     }
     el.value = value;
-    if (init) hideOpts.call(el);
   };
 }
 
@@ -350,20 +358,33 @@ function padLeft(val, width) {
   return ' '.repeat(Math.max(0, width - val.length)) + val;
 }
 
-function fitNameColumn(styles) {
-  const align = 1e9; // required by sort()
-  const lengths = styles.map(s => align +
-    (s = s.displayName || s.name || '').length +
-    s.replace(/[^\u3000-\uFE00]+/g, '').length).sort(); // CJK glyphs are twice as wide
-  const pick = .8; // for example, .8 = 80% in single line, 20% multiline
-  const extras = 5; // an average for " UC ", "v1.0.0"
-  const res = lengths[styles.length * pick | 0] - align + extras;
+function fitNameColumn(styles, style) {
+  if (style) calcNameLenKey(style);
+  styles = styles ? styles.map(calcNameLenKey) : [...nameLengths.values()];
+  const pick = sorter.columns > 1 ? .8 : .95; // quotient of entries in single line
+  const extras = 5; // average for optional extras like " UC ", "v1.0.0"
+  const res = nameLengths.res = styles.sort()[nameLengths.size * pick | 0] + extras - 1e9;
   $.root.style.setProperty('--name-width', res + 'ch');
 }
 
-function fitSizeColumn(entries) {
-  const max = entries.reduce((res, e) => Math.max(res, e.styleSize), 0);
-  $.root.style.setProperty('--size-width', renderSize(max).length + 'ch');
+function calcNameLenKey(style) {
+  const name = style.displayName || style.name || '';
+  const len = 1e9 + // aligning the key for sort() which uses string comparison
+    (style.enabled ? 1.05/*bold factor*/ : 1) *
+    (name.length + name.replace(/[^\u3000-\uFE00]+/g, '').length/*CJK glyph is 2x wide*/) | 0;
+  nameLengths.set(style.id, len);
+  return len;
+}
+
+function fitSizeColumn(entries = installed.children, entry) {
+  let res = entry && renderSize(entry.styleSize).length || 0;
+  if (!res) {
+    for (const e of entries) res = Math.max(res, e.styleSize);
+    res = renderSize(res).length;
+  } else if (res <= parseInt($.root.style.getPropertyValue('--size-width'))) {
+    return;
+  }
+  $.root.style.setProperty('--size-width', res + 'ch');
 }
 
 function showStyles(styles = [], matchUrlIds) {
@@ -373,7 +394,9 @@ function showStyles(styles = [], matchUrlIds) {
   let firstRun = true;
   installed.dataset.total = styles.length;
   const scrollY = (history.state || {}).scrollY;
-  const shouldRenderAll = scrollY > window.innerHeight || sessionStore.justEditedStyleId;
+  const shouldRenderAll = scrollY > window.innerHeight
+    || sessionStore.justEditedStyleId
+    || CSS.supports('content-visibility', 'auto');
   const renderBin = document.createDocumentFragment();
   fitNameColumn(styles);
   fitSizeColumn(dummies);
@@ -402,8 +425,6 @@ function showStyles(styles = [], matchUrlIds) {
     getFaviconSrc();
     if (sessionStore.justEditedStyleId) {
       setTimeout(highlightEditedStyle); // delaying to avoid forced layout
-    } else if ('scrollY' in (history.state || {})) {
-      setTimeout(window.scrollTo, 0, 0, history.state.scrollY);
     }
   }
 }
@@ -422,14 +443,11 @@ function styleToDummyEntry(style) {
 function switchUI({styleOnly} = {}) {
   const current = {};
   const changed = {};
-  let someChanged = false;
   newUI.readPrefs(current, (id, value) => {
-    const valueChanged = value !== newUI[id] && (id === 'enabled' || current.enabled);
-    changed[id] = valueChanged;
-    someChanged |= valueChanged;
+    changed[id] = value !== newUI[id] && (id === 'enabled' || current.enabled);
   });
 
-  if (!styleOnly && !someChanged) {
+  if (!styleOnly && isEmptyObj(changed)) {
     return;
   }
 
@@ -438,9 +456,7 @@ function switchUI({styleOnly} = {}) {
 
   installed.classList.toggle('has-favicons', newUI.hasFavs());
   installed.classList.toggle('favicons-grayed', newUI.enabled && newUI.faviconsGray);
-  if (installed.style.getPropertyValue('--num-targets') !== `${newUI.targets}`) {
-    installed.style.setProperty('--num-targets', newUI.targets);
-  }
+  installed.style.setProperty('--num-targets', newUI.targets);
 
   if (styleOnly) {
     return;
@@ -450,7 +466,7 @@ function switchUI({styleOnly} = {}) {
   let iconsMissing = iconsEnabled && !$('.applies-to img');
   if (changed.enabled || (iconsMissing && !elementParts)) {
     installed.textContent = '';
-    API.styles.getAll().then(showStyles);
+    requestAnimationFrame(() => API.styles.getAll().then(showStyles));
     return;
   }
   if (changed.targets) {
@@ -464,6 +480,5 @@ function switchUI({styleOnly} = {}) {
   }
   if (iconsMissing) {
     debounce(getFaviconSrc);
-    return;
   }
 }

@@ -1,5 +1,6 @@
 :root {
-  --onoffswitch-width: 60px;
+  --value-cell-w: 60px;
+  --colorview-swatch: transparent;
 }
 
 .config-dialog {
@@ -15,6 +16,10 @@
   overflow-y: overlay;
 }
 
+.config-dialog #message-box-buttons {
+  padding: calc(var(--pad)/2) var(--padR) calc(var(--pad)/2) var(--padL);
+}
+
 .sb-overlay {
   --padR: 32px;
   --iconR: calc(var(--padR) - var(--icon)); /* left-align inside --padR */
@@ -25,7 +30,7 @@
 }
 
 #stylus-popup .config-body label {
-  padding: .5em 0;
+  --item-padY: .5em;
 }
 
 .config-heading {
@@ -41,8 +46,10 @@
 
 .config-body label {
   display: flex;
-  padding: .75em 0;
   align-items: center;
+  --item-padY: .75em;
+  padding: calc(var(--item-padY) * (1 - var(--num) / 30)) 0; /* old browsers */
+  padding: calc(var(--item-padY) * clamp(.2, 1 - (var(--num) - 5) / 30, 1)) 0; /* modern browsers */
 }
 
 .config-body .select-wrapper {
@@ -71,10 +78,8 @@
   left: 6px;
 }
 
-.config-body input,
-.config-body select,
-.config-body .onoffswitch {
-  width: var(--onoffswitch-width);
+.config-body input:not(.slider), .config-body select {
+  width: var(--value-cell-w);
   margin: 0;
   height: var(--input-height);
   box-sizing: border-box;
@@ -85,20 +90,18 @@
 .config-body .select-wrapper,
 .config-body select {
   width: auto;
-  min-width: var(--onoffswitch-width);
+  min-width: var(--value-cell-w);
   max-width: 124px;
   left: auto;
   position: relative;
 }
 
-.config-body .onoffswitch {
-  height: auto;
-  margin: calc((2em - 12px) / 2) 0;
-  flex-grow: 0;
-}
-
 .config-body input[type="text"] {
   padding-left: 0.25em;
+}
+
+.config-body .slider {
+  --width: 40px;
 }
 
 .config-name {
@@ -111,7 +114,7 @@
   flex-shrink: 0;
 }
 
-.config-value:not(.onoffswitch):not(.select-wrapper) > :not(:last-child) {
+.config-value:not(.slider):not(.select-wrapper) > :not(:last-child) {
   margin-right: 4px;
 }
 
@@ -187,7 +190,7 @@
 #message-box .colorview-swatch::before,
 #message-box .colorview-swatch::after,
 .color-swatch {
-  width: var(--onoffswitch-width);
+  width: var(--value-cell-w);
   height: 20px;
   left: 0;
   margin: 0;

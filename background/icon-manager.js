@@ -22,13 +22,16 @@ const iconMan = (() => {
   addAPI(/** @namespace API */ {
   /**
    * @param {(number|string)[]} styleIds
-   * @param {boolean} [lazyBadge=false] preventing flicker during page load
+   * @param {{}} opts
+   * @param {boolean} [opts.lazyBadge=false] preventing flicker during page load
+   * @param {string} [opts.iid] - instance id
    */
-    updateIconBadge(styleIds, {lazyBadge} = {}) {
+    updateIconBadge(styleIds, {lazyBadge, iid} = {}) {
       // FIXME: in some cases, we only have to redraw the badge. is it worth a optimization?
       const {frameId, tab: {id: tabId}} = this.sender;
       const value = styleIds.length ? styleIds.map(Number) : undefined;
       tabMan.set(tabId, 'styleIds', frameId, value);
+      if (iid) tabMan.set(tabId, 'iid', frameId, iid);
       debounce(refreshStaleBadges, frameId && lazyBadge ? 250 : 0);
       staleBadges.add(tabId);
       if (!frameId) refreshIcon(tabId, true);
@@ -36,7 +39,10 @@ const iconMan = (() => {
   });
 
   chrome.webNavigation.onCommitted.addListener(({tabId, frameId}) => {
-    if (!frameId) tabMan.set(tabId, 'styleIds', undefined);
+    const ids = tabMan.getStyleIds(tabId);
+    if (!ids) return;
+    if (frameId) delete ids[frameId];
+    else tabMan.delete(tabId);
   });
   chrome.runtime.onConnect.addListener(port => {
     if (port.name === 'iframe') {
@@ -54,14 +60,14 @@ const iconMan = (() => {
       'disableAll',
       'badgeDisabled',
       'badgeNormal',
-    ], () => debounce(refreshIconBadgeColor), {runNow: true});
+    ], () => debounce(refreshIconBadgeColor), true);
     prefs.subscribe([
       'show-badge',
-    ], () => debounce(refreshAllIconsBadgeText), {runNow: true});
+    ], () => debounce(refreshAllIconsBadgeText), true);
     prefs.subscribe([
       'disableAll',
       'iconset',
-    ], () => debounce(refreshAllIcons), {runNow: true});
+    ], () => debounce(refreshAllIcons), true);
   });
 
   return {
@@ -74,7 +80,7 @@ const iconMan = (() => {
       badgeOvr.color = color;
       refreshIconBadgeColor();
       setBadgeText({text});
-      for (const tabId of tabMan.list()) {
+      for (const tabId of tabMan.keys()) {
         if (text) {
           setBadgeText({tabId, text});
         } else {
@@ -88,7 +94,7 @@ const iconMan = (() => {
   };
 
   function onPortDisconnected({sender}) {
-    if (tabMan.get(sender.tab.id, 'styleIds')) {
+    if (tabMan.getStyleIds(sender.tab.id)) {
       API.updateIconBadge.call({sender}, [], {lazyBadge: true});
     }
   }
@@ -108,7 +114,7 @@ const iconMan = (() => {
 
   function refreshIcon(tabId, force = false) {
     const oldIcon = tabMan.get(tabId, 'icon');
-    const newIcon = getIconName(tabMan.get(tabId, 'styleIds', 0));
+    const newIcon = getIconName(tabMan.getStyleIds(tabId)[0]);
     // (changing the icon only for the main page, frameId = 0)
 
     if (!force && oldIcon === newIcon) {
@@ -134,7 +140,7 @@ const iconMan = (() => {
   /** @return {number | ''} */
   function getStyleCount(tabId) {
     const allIds = new Set();
-    const data = tabMan.get(tabId, 'styleIds') || {};
+    const data = tabMan.getStyleIds(tabId) || {};
     Object.values(data).forEach(frameIds => frameIds.forEach(id => allIds.add(id)));
     return allIds.size || '';
   }
@@ -175,14 +181,14 @@ const iconMan = (() => {
   }
 
   function refreshAllIcons() {
-    for (const tabId of tabMan.list()) {
+    for (const tabId of tabMan.keys()) {
       refreshIcon(tabId);
     }
     refreshGlobalIcon();
   }
 
   function refreshAllIconsBadgeText() {
-    for (const tabId of tabMan.list()) {
+    for (const tabId of tabMan.keys()) {
       refreshIconBadgeText(tabId);
     }
   }

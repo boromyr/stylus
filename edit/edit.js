@@ -126,11 +126,12 @@ async function handleExternalUpdate({style, reason}) {
   if (reason === 'toggle') {
     if (editor.dirty.isDirty()) {
       editor.toggleStyle(style.enabled);
+      // updateLivePreview is called by toggleStyle
     } else {
       Object.assign(editor.style, style);
+      editor.updateLivePreview();
     }
     editor.updateMeta();
-    editor.updateLivePreview();
     return;
   }
   style = await API.styles.get(style.id);
@@ -371,7 +372,7 @@ function EditorMethods() {
       }
     }
     cmFactory.globalSetOption('colorpicker', defaults.colorpicker);
-  }, {runNow: true});
+  }, true);
 
   $('#colorpicker-settings').onclick = function (event) {
     event.preventDefault();

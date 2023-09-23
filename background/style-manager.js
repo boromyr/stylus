@@ -1,49 +1,29 @@
 /* global API msg */// msg.js
 /* global CHROME URLS deepEqual isEmptyObj mapObj stringAsRegExpStr tryRegExp tryURL */// toolbox.js
-/* global bgReady createCache uuidIndex */// common.js
+/* global bgReady broadcastInjectorConfig createCache uuidIndex */// common.js
 /* global calcStyleDigest styleCodeEmpty */// sections-util.js
 /* global db */
 /* global prefs */
 /* global tabMan */
+/* global getUrlOrigin */// tab-util.js
 /* global usercssMan */
 /* global colorScheme */
 'use strict';
-
-/*
-This style manager is a layer between content script and the DB. When a style
-is added/updated, it broadcast a message to content script and the content
-script would try to fetch the new code.
-
-The live preview feature relies on `runtime.connect` and `port.onDisconnect`
-to cleanup the temporary code. See livePreview in /edit.
-*/
 
 const styleUtil = {};
 
 /* exported styleMan */
 const styleMan = (() => {
 
-  Object.assign(styleUtil, {
-    id2style,
-    handleSave,
-    uuid2style,
-  });
-
   //#region Declarations
 
-  /** @typedef {{
-    style: StyleObj,
-    preview?: StyleObj,
-    appliesTo: Set<string>,
-  }} StyleMapData */
   /** @type {Map<number,StyleMapData>} */
   const dataMap = new Map();
-  /** @typedef {Object<styleId,{id: number, code: string[]}>} StyleSectionsToApply */
-  /** @type {Map<string,{maybeMatch: Set<styleId>, sections: StyleSectionsToApply}>} */
+  /** @type {Map<string,CachedInjectedStyles>} */
   const cachedStyleForUrl = createCache({
-    onDeleted(url, cache) {
-      for (const section of Object.values(cache.sections)) {
-        const data = id2data(section.id);
+    onDeleted(url, {sections}) {
+      for (const id in sections) {
+        const data = id2data(id);
         if (data) data.appliesTo.delete(url);
       }
     },
@@ -52,6 +32,7 @@ const styleMan = (() => {
   const compileRe = createCompiler(text => `^(${text})$`);
   const compileSloppyRe = createCompiler(text => `^${text}$`);
   const compileExclusion = createCompiler(buildExclusion);
+
   const uuidv4 = crypto.randomUUID ? crypto.randomUUID.bind(crypto) : (() => {
     const seeds = crypto.getRandomValues(new Uint16Array(8));
     // 00001111-2222-M333-N444-555566667777
@@ -59,14 +40,22 @@ const styleMan = (() => {
     seeds[4] = seeds[4] & 0x3FFF | 0x8000; // UUID variant 1, N = 8..0xB
     return Array.from(seeds, hex4dashed).join('');
   });
+
+  const CFG_OFF = {cfg: {off: true}};
   const MISSING_PROPS = {
     name: style => `ID: ${style.id}`,
     _id: () => uuidv4(),
     _rev: () => Date.now(),
   };
   const DELETE_IF_NULL = ['id', 'customName', 'md5Url', 'originalMd5'];
+
+  const ON_DISCONNECT = {
+    livePreview: onPreviewEnd,
+    draft: onDraftEnd,
+  };
+
   const INJ_ORDER = 'injectionOrder';
-  const order = {main: {}, prio: {}};
+  const order = /** @type {InjectionOrder} */{main: {}, prio: {}};
   const orderWrap = {
     id: INJ_ORDER,
     value: mapObj(order, () => []),
@@ -74,6 +63,14 @@ const styleMan = (() => {
     _rev: 0,
   };
   uuidIndex.addCustom(orderWrap, {set: setOrder});
+
+  Object.assign(styleUtil, {
+    handleSave,
+    id2style,
+    iterStyles,
+    uuid2style,
+    order,
+  });
 
   class MatchQuery {
     constructor(url) {
@@ -97,15 +94,14 @@ const styleMan = (() => {
     }
   }
 
-  /** @type {Promise|boolean} will be `true` to avoid wasting a microtask tick on each `await` */
-  let ready = Promise.all([init(), prefs.ready]);
+  init();
 
   chrome.runtime.onConnect.addListener(port => {
-    if (port.name === 'livePreview') {
-      handleLivePreview(port);
-    } else if (port.name.startsWith('draft:')) {
-      handleDraft(port);
-    }
+    // Using ports to reliably track when the client is closed, however not for messaging,
+    // because our `API` is much faster due to direct invocation.
+    const type = port.name.split(':', 1)[0];
+    const fn = ON_DISCONNECT[type];
+    if (fn) port.onDisconnect.addListener(fn);
   });
   colorScheme.onChange(value => {
     msg.broadcastExtension({method: 'colorScheme', value});
@@ -120,9 +116,8 @@ const styleMan = (() => {
   //#region Exports
 
   return {
-    /** @returns {Promise<number>} style id */
-    async delete(id, reason) {
-      if (ready.then) await ready;
+    /** @returns {number} style id */
+    delete(id, reason) {
       const {style, appliesTo} = dataMap.get(id);
       const sync = reason !== 'sync';
       const uuid = style._id;
@@ -145,25 +140,23 @@ const styleMan = (() => {
         API.usw.revoke(id);
       }
       API.drafts.delete(id).catch(() => {});
-      await msg.broadcast({
+      msg.broadcast({
         method: 'styleDeleted',
         style: {id},
-      });
+      }, {onlyIfStyled: true});
       return id;
     },
 
     /** @returns {Promise<StyleObj>} */
-    async editSave(style) {
-      if (ready.then) await ready;
+    editSave(style) {
       style = mergeWithMapped(style);
       style.updateDate = Date.now();
       API.drafts.delete(style.id).catch(() => {});
       return saveStyle(style, {reason: 'editSave'});
     },
 
-    /** @returns {Promise<?StyleObj>} */
-    async find(filter, subkey) {
-      if (ready.then) await ready;
+    /** @returns {StyleObj|void} */
+    find(filter, subkey) {
       for (const {style} of dataMap.values()) {
         let obj = subkey ? style[subkey] : style;
         if (!obj) continue;
@@ -177,15 +170,10 @@ const styleMan = (() => {
       }
     },
 
-    /** @returns {Promise<StyleObj[]>} */
-    async getAll() {
-      if (ready.then) await ready;
-      return getAllAsArray();
-    },
+    getAll: () => Array.from(dataMap.values(), v => v.style),
 
-    /** @returns {Promise<Object<string,StyleObj[]>>}>} */
-    async getAllOrdered(keys) {
-      if (ready.then) await ready;
+    /** @returns {{[type: string]: StyleObj[]}}>} */
+    getAllOrdered(keys) {
       const res = mapObj(orderWrap.value, group => group.map(uuid2style).filter(Boolean));
       if (res.main.length + res.prio.length < dataMap.size) {
         for (const {style} of dataMap.values()) {
@@ -199,11 +187,11 @@ const styleMan = (() => {
         : res;
     },
 
+    /** @returns {{[type: string]: string[]}}>} */
     getOrder: () => orderWrap.value,
 
-    /** @returns {Promise<string | {[remoteId:string]: styleId}>}>} */
-    async getRemoteInfo(id) {
-      if (ready.then) await ready;
+    /** @returns {string | {[remoteId:string]: styleId}}>} */
+    getRemoteInfo(id) {
       if (id) return calcRemoteId(id2style(id));
       const res = {};
       for (const {style} of dataMap.values()) {
@@ -213,25 +201,32 @@ const styleMan = (() => {
       return res;
     },
 
-    /** @returns {Promise<StyleSectionsToApply>} */
-    async getSectionsByUrl(url, id, isInitialApply) {
-      if (ready.then) await ready;
-      if (isInitialApply && prefs.get('disableAll')) {
-        return {
-          cfg: {
-            disableAll: true,
-          },
-        };
+    /** @returns {{ cfg: InjectionConfig, sections: InjectedStyle[] }} */
+    getSectionsByUrl(url, id, isInitialApply) {
+      const p = prefs.__values;
+      if (isInitialApply && p.disableAll) {
+        return CFG_OFF;
       }
-      // TODO: enable in FF when it supports sourceURL comment in style elements (also options.html)
-      const {exposeStyleName} = CHROME && prefs.__values;
-      const sender = CHROME && this && this.sender || {};
-      if (sender.frameId === 0) {
+      const {sender = {}} = this || {};
+      const {tab = {}, frameId} = sender;
+      /** @type {InjectionConfig} */
+      const cfg = !id && {
+        // TODO: enable in FF when it supports sourceURL comment in style elements (also options.html)
+        name: CHROME && p.exposeStyleName,
+        top: isInitialApply && p.exposeIframes && (
+          // sender may come from webRequest.onBeforeRequest for a prerendered main_frame with frameId>0
+          !frameId || sender.type === 'main_frame' ? '' // apply.js will use location.origin
+            : getUrlOrigin(tab.url || tabMan.get(sender.tabId || tab.id, 'url'))
+        ),
+        order,
+      };
+      if (frameId === 0) {
         /* Chrome hides text frament from location.href of the page e.g. #:~:text=foo
            so we'll use the real URL reported by webNavigation API.
            TODO: if FF will do the same, this won't work as is: FF reports onCommitted too late */
-        url = tabMan.get(sender.tab.id, 'url', 0) || url;
+        url = tabMan.get(tab.id, 'url') || url;
       }
+      /** @type {CachedInjectedStyles} */
       let cache = cachedStyleForUrl.get(url);
       if (!cache) {
         cache = {
@@ -243,26 +238,26 @@ const styleMan = (() => {
       } else if (cache.maybeMatch.size) {
         buildCache(cache, url, Array.from(cache.maybeMatch, id2data).filter(Boolean));
       }
-      return Object.assign({cfg: {exposeStyleName, order}},
-        id ? mapObj(cache.sections, null, [id])
-          : cache.sections);
+      let res = cache.sections;
+      return {
+        cfg,
+        sections: id
+          ? ((res = res[id])) ? [res] : []
+          : Object.values(res),
+      };
     },
 
-    /** @returns {Promise<StyleObj>} */
-    async get(id) {
-      if (ready.then) await ready;
-      return id2style(id);
-    },
+    /** @returns {StyleObj} */
+    get: id2style,
 
-    /** @returns {Promise<StylesByUrlResult[]>} */
-    async getByUrl(url, id = null) {
-      if (ready.then) await ready;
+    /** @returns {StylesByUrlResult[]} */
+    getByUrl(url, id = null) {
       // FIXME: do we want to cache this? Who would like to open popup rapidly
       // or search the DB with the same URL?
       const result = [];
       const styles = id
         ? [id2style(id)].filter(Boolean)
-        : getAllAsArray();
+        : iterStyles();
       const query = new MatchQuery(url);
       for (const style of styles) {
         let excluded = false;
@@ -304,7 +299,6 @@ const styleMan = (() => {
 
     /** @returns {Promise<{style?:StyleObj, err?:?}[]>} */
     async importMany(items) {
-      if (ready.then) await ready;
       const res = [];
       const styles = [];
       for (const style of items) {
@@ -319,14 +313,24 @@ const styleMan = (() => {
         }
       }
       const events = await db.styles.putMany(styles);
-      return Promise.all(res.map(r => r.err ? r : {
-        style: handleSave(styles[r], {reason: 'import'}, events[r]),
-      }));
+      const messages = [];
+      for (let i = 0, r; i < res.length; i++) {
+        r = res[i];
+        if (!r.err) {
+          const id = events[r];
+          const method = dataMap.has(id) ? 'styleUpdated' : 'styleAdded';
+          const style = handleSave(styles[r], {broadcast: false}, id);
+          messages.push([style, 'import', method]);
+          buildCacheForStyle(style);
+          res[i] = {style};
+        }
+      }
+      setTimeout(() => messages.forEach(args => broadcastStyleUpdated(...args)), 100);
+      return Promise.all(res);
     },
 
     /** @returns {Promise<StyleObj>} */
     async install(style, reason = null) {
-      if (ready.then) await ready;
       if (!reason) reason = dataMap.has(style.id) ? 'update' : 'install';
       style = mergeWithMapped(style);
       style.originalDigest = await calcStyleDigest(style);
@@ -334,55 +338,67 @@ const styleMan = (() => {
       return saveStyle(style, {reason});
     },
 
+    /** @param {StyleObj} style */
+    preview(style) {
+      id2data(style.id).preview = style;
+      broadcastStyleUpdated(style, 'editPreview');
+    },
+
+    /** @returns {Promise<StyleObj>} */
     save: saveStyle,
 
-    async setOrder(value) {
-      if (ready.then) await ready;
+    /** @returns {Promise<void>} */
+    setOrder(value) {
       return setOrder({value}, {broadcast: true, sync: true});
     },
 
-    /** @returns {Promise<number>} style id */
+    /** @returns {Promise<StyleObj>} */
     async toggle(id, enabled) {
-      if (ready.then) await ready;
       const style = Object.assign({}, id2style(id), {enabled});
       await saveStyle(style, {reason: 'toggle'});
-      return id;
     },
 
-    // using bind() to skip step-into when debugging
+    /** @returns {Promise<void>} */
+    async toggleOverride(id, rule, isInclusion, isAdd) {
+      const style = Object.assign({}, id2style(id));
+      const type = isInclusion ? 'inclusions' : 'exclusions';
+      let list = style[type];
+      if (isAdd) {
+        if (!list) list = style[type] = [];
+        else if (list.includes(rule)) throw new Error('The rule already exists');
+        list.push(rule);
+      } else if (list) {
+        const i = list.indexOf(rule);
+        if (i >= 0) list.splice(i, 1);
+      } else {
+        return;
+      }
+      await saveStyle(style, {reason: 'config'});
+    },
 
-    /** @returns {Promise<StyleObj>} */
-    addExclusion: addIncludeExclude.bind(null, 'exclusions'),
-    /** @returns {Promise<StyleObj>} */
-    addInclusion: addIncludeExclude.bind(null, 'inclusions'),
-    /** @returns {Promise<?StyleObj>} */
-    removeExclusion: removeIncludeExclude.bind(null, 'exclusions'),
-    /** @returns {Promise<?StyleObj>} */
-    removeInclusion: removeIncludeExclude.bind(null, 'inclusions'),
-
+    /** @returns {Promise<void>} */
     async config(id, prop, value) {
-      if (ready.then) await ready;
       const style = Object.assign({}, id2style(id));
       const {preview = {}} = dataMap.get(id);
       style[prop] = preview[prop] = value;
-      return saveStyle(style, {reason: 'config'});
+      await saveStyle(style, {reason: 'config'});
     },
   };
 
   //#endregion
   //#region Implementation
 
-  /** @returns {StyleMapData} */
+  /** @returns {StyleMapData|void} */
   function id2data(id) {
     return dataMap.get(id);
   }
 
-  /** @returns {?StyleObj} */
+  /** @returns {StyleObj|void} */
   function id2style(id) {
     return (dataMap.get(Number(id)) || {}).style;
   }
 
-  /** @returns {?StyleObj} */
+  /** @returns {StyleObj|void} */
   function uuid2style(uuid) {
     return id2style(uuidIndex.get(uuid));
   }
@@ -400,7 +416,7 @@ const styleMan = (() => {
 
   /** @returns {StyleObj} */
   function createNewStyle() {
-    return /** @namespace StyleObj */ {
+    return {
       enabled: true,
       updateUrl: null,
       md5Url: null,
@@ -426,51 +442,17 @@ const styleMan = (() => {
       style);
   }
 
-  function handleDraft(port) {
-    const id = port.name.split(':').pop();
-    port.onDisconnect.addListener(() => API.drafts.delete(Number(id) || id).catch(() => {}));
+  function onDraftEnd(port) {
+    const id = port.name.split(':')[1];
+    API.drafts.delete(+id || id).catch(() => {});
   }
 
-  function handleLivePreview(port) {
-    let id;
-    port.onMessage.addListener(style => {
-      if (!id) id = style.id;
-      const data = id2data(id);
-      data.preview = style;
-      broadcastStyleUpdated(style, 'editPreview');
-    });
-    port.onDisconnect.addListener(() => {
-      port = null;
-      if (id) {
-        const data = id2data(id);
-        if (data) {
-          data.preview = null;
-          broadcastStyleUpdated(data.style, 'editPreviewEnd');
-        }
-      }
-    });
-  }
-
-  async function addIncludeExclude(type, id, rule) {
-    if (ready.then) await ready;
-    const style = Object.assign({}, id2style(id));
-    const list = style[type] || (style[type] = []);
-    if (list.includes(rule)) {
-      throw new Error('The rule already exists');
-    }
-    style[type] = list.concat([rule]);
-    return saveStyle(style, {reason: 'config'});
-  }
-
-  async function removeIncludeExclude(type, id, rule) {
-    if (ready.then) await ready;
-    const style = Object.assign({}, id2style(id));
-    const list = style[type];
-    if (!list || !list.includes(rule)) {
-      return;
-    }
-    style[type] = list.filter(r => r !== rule);
-    return saveStyle(style, {reason: 'config'});
+  function onPreviewEnd({name}) {
+    const id = +name.split(':')[1];
+    const data = id2data(id);
+    if (!data) return;
+    data.preview = null;
+    broadcastStyleUpdated(data.style, 'editPreviewEnd');
   }
 
   function buildCacheForStyle(style) {
@@ -498,17 +480,16 @@ const styleMan = (() => {
     data.appliesTo = updated;
   }
 
-  function broadcastStyleUpdated(style, reason, method = 'styleUpdated') {
+  function broadcastStyleUpdated(style, reason, isNew) {
     buildCacheForStyle(style);
     return msg.broadcast({
-      method,
+      method: isNew ? 'styleAdded' : 'styleUpdated',
       reason,
       style: {
         id: style.id,
-        md5Url: style.md5Url,
         enabled: style.enabled,
       },
-    });
+    }, {onlyIfStyled: !style.enabled});
   }
 
   function beforeSave(style) {
@@ -527,16 +508,17 @@ const styleMan = (() => {
     fixKnownProblems(style);
   }
 
+  /** @returns {Promise<StyleObj>} */
   async function saveStyle(style, handlingOptions) {
     beforeSave(style);
     const newId = await db.styles.put(style);
     return handleSave(style, handlingOptions, newId);
   }
 
+  /** @returns {Promise<StyleObj>} */
   function handleSave(style, {reason, broadcast = true}, id = style.id) {
     if (style.id == null) style.id = id;
     const data = id2data(id);
-    const method = data ? 'styleUpdated' : 'styleAdded';
     if (!data) {
       storeInMap(style);
     } else {
@@ -545,7 +527,7 @@ const styleMan = (() => {
     if (reason !== 'sync') {
       API.sync.putDoc(style);
     }
-    if (broadcast) broadcastStyleUpdated(style, reason, method);
+    if (broadcast) broadcastStyleUpdated(style, reason, !data);
     return style;
   }
 
@@ -569,15 +551,15 @@ const styleMan = (() => {
   }
 
   async function init() {
-    const orderPromise = API.prefsDb.get(orderWrap.id);
-    const styles = await db.styles.getAll() || [];
+    const [order, styles = []] = await Promise.all([
+      API.prefsDb.get(orderWrap.id),
+      db.styles.getAll(),
+      prefs.ready,
+    ]);
     const updated = await Promise.all(styles.map(fixKnownProblems).filter(Boolean));
-    if (updated.length) {
-      await db.styles.putMany(updated);
-    }
-    setOrder(await orderPromise, {store: false});
+    if (updated.length) setTimeout(db.styles.putMany, 0, updated);
+    setOrder(order, {store: false});
     styles.forEach(storeInMap);
-    ready = true;
     bgReady._resolveStyles();
   }
 
@@ -642,11 +624,13 @@ const styleMan = (() => {
     return res && style;
   }
 
+  function urlMatchExclusion(e) {
+    return compileExclusion(e).test(this.urlWithoutParams);
+  }
+
   function urlMatchStyle(query, style) {
-    if (
-      style.exclusions &&
-      style.exclusions.some(e => compileExclusion(e).test(query.urlWithoutParams))
-    ) {
+    let ovr;
+    if ((ovr = style.exclusions) && ovr.some(urlMatchExclusion, query)) {
       return 'excluded';
     }
     if (!style.enabled) {
@@ -655,10 +639,7 @@ const styleMan = (() => {
     if (!colorScheme.shouldIncludeStyle(style)) {
       return 'excludedScheme';
     }
-    if (
-      style.inclusions &&
-      style.inclusions.some(r => compileExclusion(r).test(query.urlWithoutParams))
-    ) {
+    if ((ovr = style.inclusions) && ovr.some(urlMatchExclusion, query)) {
       return 'included';
     }
     return true;
@@ -766,6 +747,7 @@ const styleMan = (() => {
   }
 
   function buildCacheEntry(cache, style, code = style.code) {
+    /** @type {InjectedStyle} */
     cache.sections[style.id] = {
       code,
       id: style.id,
@@ -773,9 +755,9 @@ const styleMan = (() => {
     };
   }
 
-  /** @returns {StyleObj[]} */
-  function getAllAsArray() {
-    return Array.from(dataMap.values(), v => v.style);
+  /** @return {Generator<StyleObj>} */
+  function *iterStyles() {
+    for (const v of dataMap.values()) yield v.style;
   }
 
   /** uuidv4 helper: converts to a 4-digit hex string and adds "-" at required positions */
@@ -798,7 +780,7 @@ const styleMan = (() => {
       }
     }
     if (broadcast) {
-      msg.broadcast({method: 'styleSort', order});
+      broadcastInjectorConfig('order', order);
     }
     if (store) {
       await API.prefsDb.put(orderWrap, orderWrap.id);

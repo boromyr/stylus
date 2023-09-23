@@ -2,7 +2,7 @@
 /* global API */// msg.js
 /* global CODEMIRROR_THEMES */
 /* global CodeMirror */
-/* global URLS closeCurrentTab deepEqual */// toolbox.js
+/* global URLS clipString closeCurrentTab deepEqual sessionStore */// toolbox.js
 /* global compareVersion */// cmpver.js
 /* global messageBox */
 /* global prefs */
@@ -50,7 +50,7 @@ setTimeout(() => !cm && showSpinner($('#header')), 200);
     $('#ss-scheme').append(...$('#ss-scheme', el).children);
     prefs.subscribe('schemeSwitcher.enabled', (_, val) => {
       $('#ss-scheme-off').hidden = val !== 'never';
-    }, {runNow: true});
+    }, true);
   });
 
   const [
@@ -118,8 +118,7 @@ setTimeout(() => !cm && showSpinner($('#header')), 200);
     style.updateUrl = checker.checked ? updateUrl.href : null;
   };
   checker.onchange();
-  $('.set-update-url p').textContent = updateUrl.href.length < 300 ? updateUrl.href :
-    updateUrl.href.slice(0, 300) + '...';
+  $('.set-update-url p').textContent = clipString(updateUrl.href, 300);
 
   // set prefer scheme
   $('#ss-scheme').onchange = e => {
@@ -289,7 +288,7 @@ function install(style) {
 
 function enablePostActions() {
   const {id} = installed || installedDup;
-  sessionStorage.justEditedStyleId = id;
+  sessionStore.justEditedStyleId = id;
   $('#edit').search = `?id=${id}`;
   $('#delete').onclick = async () => {
     if (await messageBox.confirm(t('deleteStyleConfirm'), 'danger center', t('confirmDelete'))) {

@@ -2,8 +2,9 @@
 /* global $entry tabURL */// popup.js
 /* global API */// msg.js
 /* global Events */
-/* global FIREFOX URLS debounce download isEmptyObj stringAsRegExp stringAsRegExpStr tryRegExp tryURL */// toolbox.js
+/* global FIREFOX URLS clipString debounce isEmptyObj stringAsRegExp stringAsRegExpStr tryRegExp tryURL */// toolbox.js
 /* global prefs */
+/* global styleFinder:true */// popup.js
 /* global t */// localization.js
 'use strict';
 
@@ -22,7 +23,6 @@
   const PINGBACK_DELAY = 5e3;
   const BUSY_DELAY = .5e3;
   const USO_AUTO_PIC_SUFFIX = '-after.png';
-  const BLANK_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
   const dom = {};
   /**
    * @typedef IndexEntry
@@ -61,7 +61,7 @@
   /** @type {?Promise} */
   let indexing;
 
-  let imgType = '.jpg';
+  let imgType = '.jpeg';
   // detect WebP support
   $create('img', {
     src: 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=',
@@ -74,11 +74,23 @@
     return {entry, result: entry && entry._result};
   };
   const rid2id = rid => rid.split('-')[1];
-  Events.searchInline = () => {
+  const eventMap = {
+    styleAdded: onStyleInstalled,
+    styleUpdated: onStyleInstalled,
+    styleDeleted: onStyleDeleted,
+  };
+  styleFinder = {};
+  styleFinder.on = async (msg, busy) => {
+    const fn = eventMap[msg.method];
+    if (!fn) return;
+    if (busy) await busy;
+    return fn(msg);
+  };
+  styleFinder.inline = () => {
     calcCategory();
     ready = start();
   };
-  Events.searchSite = event => {
+  styleFinder.inSite = event => {
     // use a less specific category if the inline search wasn't used yet
     if (!category) calcCategory({retry: 1});
     const add = (prefix, str) => str ? prefix + str : '';
@@ -157,7 +169,7 @@
     }, {passive: true});
   }
 
-  window.on('styleDeleted', ({detail: {style: {id}}}) => {
+  function onStyleDeleted({style: {id}}) {
     restoreScrollPosition();
     const r = results.find(r => r._styleId === id);
     if (r) {
@@ -165,9 +177,9 @@
       delete r._styleId;
       renderActionButtons(r.i);
     }
-  });
+  }
 
-  window.on('styleAdded', async ({detail: {style}}) => {
+  async function onStyleInstalled({style}) {
     restoreScrollPosition();
     const ri = await API.styles.getRemoteInfo(style.id);
     const r = ri && results.find(r => ri[0] === r.i);
@@ -176,7 +188,7 @@
       r._styleVars = ri[1];
       renderActionButtons(ri[0]);
     }
-  });
+  }
 
   function next() {
     displayedPage = Math.min(totalPages, displayedPage + 1);
@@ -357,12 +369,12 @@
     });
     if (!fmt) $('.search-result-title', entry).prepend(USW_ICON.cloneNode(true));
     $('.search-result-title span', entry).textContent =
-      t.breakWord(name.length < 300 ? name : name.slice(0, 300) + '...');
+      t.breakWord(clipString(name, 300));
     // screenshot
     const elShot = $('.search-result-screenshot', entry);
     let shotSrc;
     if (!fmt) {
-      shotSrc = /^https?:/i.test(shot) && shot.replace(/\.jpg$/, imgType);
+      shotSrc = /^https?:/i.test(shot) && shot.replace(/\.\w+$/, imgType);
     } else {
       elShot._src = URLS.uso + `auto_style_screenshots/${id}${USO_AUTO_PIC_SUFFIX}`;
       shotSrc = shot && !shot.endsWith(USO_AUTO_PIC_SUFFIX)
@@ -374,7 +386,6 @@
       elShot.src = shotSrc;
       elShot.onerror = fixScreenshot;
     } else {
-      elShot.src = BLANK_PIXEL;
       entry.dataset.noImage = '';
     }
     // author
@@ -422,7 +433,7 @@
       delete this._src;
     } else {
       this.onerror = null;
-      this.src = BLANK_PIXEL;
+      this.removeAttribute('src');
       this._entry.dataset.noImage = '';
       renderActionButtons(this._entry);
     }
@@ -481,7 +492,7 @@
 
   function configure() {
     const styleEntry = $entry($resultEntry(this).result._styleId);
-    Events.configure.call(this, {target: styleEntry});
+    Events.configure.call(this, {}, styleEntry);
   }
 
   async function install() {
@@ -501,7 +512,7 @@
       ? `${URLS.usoaRaw[0]}usercss/${id}.user.css`
       : `${URLS.usw}api/style/${id}.user.css`;
     try {
-      const sourceCode = await download(updateUrl);
+      const sourceCode = await (await fetch(updateUrl)).text();
       const style = await API.usercss.install({sourceCode, updateUrl});
       renderFullInfo(entry, style);
     } catch (e) {
@@ -565,7 +576,7 @@
       [INDEX_URL, 'uso', json => json.filter(v => v.f === 'uso')],
       [USW_INDEX_URL, 'usw', json => json.data],
     ].map(async ([url, prefix, transform]) => {
-      const res = transform(await download(url, {responseType: 'json'}));
+      const res = transform(await (await fetch(url)).json());
       for (const v of res) v.i = `${prefix}-${v.i}`;
       index = index ? index.concat(res) : res;
       if (index !== res) ready = ready.then(start);

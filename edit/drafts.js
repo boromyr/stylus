@@ -20,8 +20,8 @@
   prefs.subscribe('editor.autosaveDraft', (key, val) => {
     delay = clamp(val * 1000 | 0, 1000, 2 ** 32 - 1);
     const t = debounce.timers.get(updateDraft);
-    if (t != null) debounce(updateDraft, t ? delay : 0);
-  }, {runNow: true});
+    if (t) debounce(updateDraft, t.delay ? delay : 0);
+  }, true);
 
   async function maybeRestore() {
     const [draft] = await Promise.all([
@@ -46,6 +46,7 @@
         $create('button', {textContent: btn, onclick: i ? onNo : onYes})))
     );
     if (await new Promise(r => (resolve = r))) {
+      style.id = editor.style.id;
       await editor.replaceStyle(style, draft);
     } else {
       API.drafts.delete(makeId()).catch(() => {});

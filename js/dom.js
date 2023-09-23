@@ -8,7 +8,7 @@
   $remove
   $$remove
   animateElement
-  focusAccessibility
+  focusA11y
   getEventKeyName
   messageBoxProxy
   moveFocus
@@ -30,7 +30,7 @@ $.root = document.documentElement;
 $.rootCL = $.root.classList;
 
 // Makes the focus outline appear on keyboard tabbing, but not on mouse clicks.
-const focusAccessibility = {
+const focusA11y = {
   // last event's focusedViaClick
   lastFocusedViaClick: false,
   get: el => el && el.dataset.focusedViaClick != null,
@@ -130,10 +130,7 @@ function $create(selector = 'div', properties, children) {
       opt.id = id;
     }
     const cls = selector.slice(classStart + 1);
-    if (cls) {
-      opt[selector.includes(':') ? 'class' : 'className'] =
-        cls.includes('.') ? cls.replace(/\./g, ' ') : cls;
-    }
+    if (cls) opt.className = cls.replace(/\./g, ' ');
     tag = selector.slice(0, Math.min(idStart, classStart));
   } else if (Array.isArray(selector)) {
     tag = 'div';
@@ -158,7 +155,7 @@ function $create(selector = 'div', properties, children) {
         Object.assign(element.dataset, val);
         break;
       case 'attributes':
-        Object.entries(val).forEach(attr => element.setAttribute(...attr));
+        if (val) Object.entries(val).forEach(attr => element.setAttribute(...attr));
         break;
       case 'style': {
         const t = typeof val;
@@ -255,10 +252,10 @@ function moveFocus(rootElement, step) {
   if (!step) step = 1;
   for (let i = 1; i <= num; i++) {
     const el = elements[(activeIndex + i * step + num) % num];
-    if (!el.disabled && el.tabIndex >= 0) {
+    if (!el.disabled && el.tabIndex >= 0 && el.getBoundingClientRect().width) {
       el.focus();
       // suppress focus outline when invoked via click
-      toggleDataset(el, 'focusedViaClick', focusAccessibility.lastFocusedViaClick);
+      toggleDataset(el, 'focusedViaClick', focusA11y.lastFocusedViaClick);
       return activeEl !== el && el;
     }
   }
@@ -303,7 +300,7 @@ function setupLivePrefs(ids) {
   let init = true;
   // getElementsByTagName is cached so it's much faster than calling querySelector for each id
   ids = ids ? [...ids] : prefs.knownKeys.filter(id => id in document.getElementsByTagName('*'));
-  prefs.subscribe(ids, updateElement, {runNow: true});
+  prefs.subscribe(ids, updateElement, true);
   init = false;
   function onChange() {
     if (this.checkValidity() && (this.type !== 'radio' || this.checked)) {
@@ -417,13 +414,13 @@ const dom = {};
 
 prefs.subscribe('disableAll', (_, val) => {
   $.rootCL.toggle('all-disabled', val);
-}, {runNow: true});
+}, true);
 
 prefs.ready.then(() => {
   waitForSelector('details[data-pref]', {
     recur(elems) {
       for (const el of elems) {
-        prefs.subscribe(el.dataset.pref, updateOnPrefChange, {runNow: true});
+        prefs.subscribe(el.dataset.pref, updateOnPrefChange, true);
         new MutationObserver(saveOnChange)
           .observe(el, {attributes: true, attributeFilter: ['open']});
       }
@@ -450,7 +447,9 @@ prefs.ready.then(() => {
   const lazyScripts = [
     '/js/dom-on-load',
   ];
-  if (!UA.windows) $.rootCL.add('non-windows');
+  const cls = (!UA.windows ? 'non-windows ' : '') +
+    (FIREFOX ? 'firefox' : UA.opera ? 'opera' : UA.vivaldi ? 'vivaldi' : '');
+  if (cls) $.root.className += ' ' + cls;
   // set language for a) CSS :lang pseudo and b) hyphenation
   $.root.setAttribute('lang', chrome.i18n.getUILanguage());
   // set up header width resizer
@@ -471,16 +470,6 @@ prefs.ready.then(() => {
     });
     prefs.ready.then(() => dom.setHWProp(prefs.get(HWprefId)));
     lazyScripts.push('/js/header-resizer');
-  }
-  // add favicon in FF
-  if (FIREFOX) {
-    for (const size of [38, 32, 19, 16]) {
-      document.head.appendChild($create('link', {
-        rel: 'icon',
-        href: `/images/icon/${size}.png`,
-        sizes: size + 'x' + size,
-      }));
-    }
   }
   window.on('load', () => require(lazyScripts), {once: true});
 })();
